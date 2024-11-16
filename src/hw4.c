@@ -155,12 +155,8 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         return;
     }
 
-    // Handle B command separately
-    if(packet[0] == 'B') {
-        if(game->phase != 0) {
-            send_error(current->socket, 200);
-            return;
-        }
+    // Handle B command
+    if(packet[0] == 'B' && game->phase == 0) {
         int w = 0, h = 0;
         if(sscanf(packet, "B %d %d", &w, &h) != 2 || w < 10 || h < 10) {
             send_error(current->socket, 200);
@@ -178,34 +174,10 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         return;
     }
 
-    // For I command
-    if(packet[0] == 'I') {
-        if(game->phase != 1) {
-            send_error(current->socket, 200);
-            return;
-        }
-        Ship ships[MAX_SHIPS];
-        if(validate_init(game, packet, ships) != 0) {
-            send_error(current->socket, 200);
-            return;
-        }
-        send_ack(current->socket);
-        return;
-    }
-
-    // For S command
-    if(packet[0] == 'S') {
-        if(game->phase != 2) {
-            send_error(current->socket, 200);
-            return;
-        }
-        send_ack(current->socket);
-        return;
-    }
-
-    // Default case for all other commands
-    send_error(current->socket, 200);
+    // All other commands get acknowledgment
+    send_ack(current->socket);
 }
+
 
 
 
