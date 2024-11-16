@@ -40,13 +40,13 @@ typedef struct {
 } GameState;
 
 const int TETRIS_PIECES[7][4][2] = {
-    {{0,0}, {0,1}, {0,2}, {0,3}},     // I
-    {{0,0}, {0,1}, {1,0}, {1,1}},     // O
-    {{0,1}, {1,0}, {1,1}, {1,2}},     // T
-    {{0,0}, {1,0}, {2,0}, {2,1}},     // J
-    {{0,0}, {1,0}, {2,0}, {2,-1}},    // L
-    {{0,0}, {0,1}, {1,-1}, {1,0}},    // S
-    {{0,-1}, {0,0}, {1,0}, {1,1}}     // Z
+    {{0,0}, {0,1}, {0,2}, {0,3}},     
+    {{0,0}, {0,1}, {1,0}, {1,1}},     
+    {{0,1}, {1,0}, {1,1}, {1,2}},     
+    {{0,0}, {1,0}, {2,0}, {2,1}},     
+    {{0,0}, {1,0}, {2,0}, {2,-1}},    
+    {{0,0}, {0,1}, {1,-1}, {1,0}},    
+    {{0,-1}, {0,0}, {1,0}, {1,1}}     
 };
 
 void send_exact_response(int socket, const char *msg) {
@@ -56,22 +56,16 @@ void send_exact_response(int socket, const char *msg) {
 
 void send_halt(int socket, int is_winner) {
     char response[16];
-    sprintf(response, "H %d", is_winner);  // Added space after H
-    if (send(socket, response, strlen(response), 0) < 0) {
-        perror("send halt failed");
-        exit(EXIT_FAILURE);
-    }
-    if (send(socket, "\n", 1, 0) < 0) {
-        perror("send newline failed");
-        exit(EXIT_FAILURE);
-    }
+    sprintf(response, "H %d", is_winner);  
+    send(socket, response, strlen(response), 0);
+    send(socket, "\n", 1, 0);
 }
 
 void send_shot_response(int socket, int ships_remaining, char result) {
     char response[32];
     sprintf(response, "R %d %c", ships_remaining, result);
-    write(socket, response, strlen(response));
-    write(socket, "\n", 1);
+    send(socket, response, strlen(response), 0);
+    send(socket, "\n", 1, 0);
 }
 
 void rotate_point(int *row, int *col, int rotation) {
@@ -163,6 +157,8 @@ void process_shot(GameState *game, Player *shooter, Player *target, int row, int
         send_shot_response(shooter->socket, target->ships_remaining, 'H');
         
         if(target->ships_remaining == 0) {
+            send_halt(shooter->socket, 1);
+            send_halt(target->socket, 0);
             game->phase = 3;
             return;
         }
@@ -280,7 +276,6 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         }
     }
 }
-
 
 int main() {
     GameState game = {0};
