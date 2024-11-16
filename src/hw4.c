@@ -144,23 +144,6 @@ void place_ships(GameState *game, Player *player, Ship *ships) {
     player->ships_remaining = MAX_SHIPS * 4;
 }
 
-void process_shot(GameState *game, Player *shooter, Player *target, int row, int col) {
-    shooter->shots[row][col] = 1;
-    if(target->board[row][col]) {
-        target->ships_remaining--;
-        send_shot_response(shooter->socket, target->ships_remaining, 'H');
-        if(target->ships_remaining == 0) {
-            send_halt(shooter->socket, 1);
-            send_halt(target->socket, 0);
-            game->phase = 3;
-            return;
-        }
-    } else {
-        send_shot_response(shooter->socket, target->ships_remaining, 'M');
-    }
-    game->current_turn = (game->current_turn == 1) ? 2 : 1;
-}
-
 void process_packet(GameState *game, char *packet, int is_p1) {
     Player *current = is_p1 ? &game->p1 : &game->p2;
     Player *other = is_p1 ? &game->p2 : &game->p1;
@@ -174,13 +157,13 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
     switch(packet[0]) {
         case 'B': {
-            if(game->phase != 0) {
-                send_ack(current->socket);
-                return;
-            }
             int w = 0, h = 0;
             if(sscanf(packet, "B %d %d", &w, &h) != 2 || w < 10 || h < 10) {
-                send_error(current->socket, 200);
+                if(game->phase == 0) {
+                    send_error(current->socket, 200);
+                } else {
+                    send_ack(current->socket);
+                }
                 return;
             }
             if(is_p1) {
@@ -194,17 +177,44 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             }
             break;
         }
-        case 'I': 
+        case 'I': {
+            if(game->phase != 1) {
+                send_ack(current->socket);
+                return;
+            }
+            Ship ships[MAX_SHIPS];
+            int result = validate_init(game, packet, ships);
+            if(result != 0) {
+                send_ack(current->socket);
+                return;
+            }
+            place_ships(game, current, ships);
+            send_ack(current->socket);
+            current->ready = 2;
+            if(game->p1.ready == 2 && game->p2.ready == 2) {
+                game->phase = 2;
+            }
+            break;
+        }
         case 'S':
         case 'Q': {
+            if(game->phase != 2) {
+                send_ack(current->socket);
+                return;
+            }
+            if((is_p1 && game->current_turn != 1) || (!is_p1 && game->current_turn != 2)) {
+                send_error(current->socket, 103);
+                return;
+            }
             send_ack(current->socket);
             break;
         }
         default:
-            send_error(current->socket, 300);
+            send_ack(current->socket);
             break;
     }
 }
+
 
 
 int main() {
