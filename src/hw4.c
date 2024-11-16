@@ -83,6 +83,7 @@ void rotate_point(int *row, int *col, int rotation) {
 }
 
 int validate_ship_placement(GameState *game, Ship ship, int board[MAX_BOARD][MAX_BOARD]) {
+    int lowest_error = 0;
     if(ship.type < 1 || ship.type > 7) return 300;
     if(ship.rotation < 0 || ship.rotation > 3) return 301;
     
@@ -95,15 +96,16 @@ int validate_ship_placement(GameState *game, Ship ship, int board[MAX_BOARD][MAX
         col += ship.col;
         
         if(row < 0 || row >= game->height || col < 0 || col >= game->width) {
-            return 302;
+            lowest_error = 302;
+            continue;
         }
-        if(board[row][col]) {
-            return 303;
+        if(board[row][col] && lowest_error != 302) {
+            lowest_error = 303;
         }
-        board[row][col] = 1;
     }
-    return 0;
+    return lowest_error ? lowest_error : 0;
 }
+
 
 int validate_init(GameState *game, char *packet, Ship *ships) {
     char *token = strtok(packet + 2, " ");
