@@ -53,9 +53,8 @@ const int TETRIS_PIECES[7][4][2] = {
 
 void send_error(int socket, int code) {
     char response[16];
-    sprintf(response, "E %d", code);
+    sprintf(response, "E %d\n", code);
     write(socket, response, strlen(response));
-    write(socket, "\n", 1);
 }
 
 void send_ack(int socket) {
