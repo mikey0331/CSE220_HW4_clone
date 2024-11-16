@@ -50,23 +50,23 @@ const int TETRIS_PIECES[7][4][2] = {
 };
 
 void send_exact_response(int socket, const char *msg) {
-    write(socket, msg, strlen(msg));
-    write(socket, "\n", 1);
-}
-
-void send_halt(int socket, int is_winner) {
-    char response[16];
-    sprintf(response, "H %d", is_winner);
+    char response[BUFFER_SIZE];
+    sprintf(response, "%s\n", msg);
     write(socket, response, strlen(response));
-    write(socket, "\n", 1);
 }
 
 void send_shot_response(int socket, int ships_remaining, char result) {
-    char response[32];
-    sprintf(response, "R %d %c", ships_remaining, result);
+    char response[BUFFER_SIZE];
+    sprintf(response, "R %d %c\n", ships_remaining, result);
     write(socket, response, strlen(response));
-    write(socket, "\n", 1);
 }
+
+void send_halt(int socket, int is_winner) {
+    char response[BUFFER_SIZE];
+    sprintf(response, "H %d\n", is_winner);
+    write(socket, response, strlen(response));
+}
+
 
 void rotate_point(int *row, int *col, int rotation) {
     int temp;
@@ -176,24 +176,17 @@ void build_query_response(GameState *game, Player *player, Player *opponent, cha
 
 void process_packet(GameState *game, char *packet, int is_p1) {
     Player *current = is_p1 ? &game->p1 : &game->p2;
-    Player *other = is_p1 ? &game->p2 : &game->p1;
 
+    // Only handle forfeit for current player
     if(packet[0] == 'F') {
         send_halt(current->socket, 0);
         game->phase = 3;
         return;
     }
 
+    // Phase validation - only respond to current player
     if(game->phase == 0 && packet[0] != 'B') {
         send_exact_response(current->socket, "E 100");
-        return;
-    }
-    if(game->phase == 1 && packet[0] != 'I') {
-        send_exact_response(current->socket, "E 101");
-        return;
-    }
-    if(game->phase == 2 && packet[0] != 'S' && packet[0] != 'Q') {
-        send_exact_response(current->socket, "E 102");
         return;
     }
 
@@ -217,6 +210,10 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         }
 
         case 'I': {
+            if(game->phase != 1) {
+                send_exact_response(current->socket, "E 101");
+                return;
+            }
             Ship ships[MAX_SHIPS];
             int error = validate_init(game, packet, ships);
             if(error) {
@@ -235,39 +232,36 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         }
 
         case 'S': {
+            if(game->phase != 2) {
+                send_exact_response(current->socket, "E 102");
+                return;
+            }
             if((is_p1 && game->current_turn != 1) || (!is_p1 && game->current_turn != 2)) {
                 send_exact_response(current->socket, "E 103");
                 return;
             }
-            int row, col;
-            if(sscanf(packet, "S %d %d", &row, &col) != 2) {
-                send_exact_response(current->socket, "E 202");
-                return;
-            }
-            if(row < 0 || row >= game->height || col < 0 || col >= game->width) {
-                send_exact_response(current->socket, "E 400");
-                return;
-            }
-            if(current->shots[row][col]) {
-                send_exact_response(current->socket, "E 401");
-                return;
-            }
-            process_shot(game, current, other, row, col);
+            // Process shot only for current player's turn
+            process_shot(game, current, is_p1 ? &game->p2 : &game->p1);
             break;
         }
 
         case 'Q': {
+            if(game->phase != 2) {
+                send_exact_response(current->socket, "E 102");
+                return;
+            }
             if((is_p1 && game->current_turn != 1) || (!is_p1 && game->current_turn != 2)) {
                 send_exact_response(current->socket, "E 103");
                 return;
             }
             char response[BUFFER_SIZE];
-            build_query_response(game, current, other, response);
+            build_query_response(game, current, is_p1 ? &game->p2 : &game->p1, response);
             send_exact_response(current->socket, response);
             break;
         }
     }
 }
+
 
 int setup_socket(int port) {
     int server_fd;
