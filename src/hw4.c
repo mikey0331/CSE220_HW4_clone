@@ -29,21 +29,35 @@ typedef struct {
 } GameState;
 
 void send_packet(int socket, const char *msg) {
-    char buffer[BUFFER_SIZE];
-    snprintf(buffer, sizeof(buffer), "%s\n", msg);
-    send(socket, buffer, strlen(buffer), 0);
+    write(socket, msg, strlen(msg));
+    write(socket, "\n", 1);
 }
 
 void handle_packet(GameState *game, char *packet, int player_num) {
     Player *current = (player_num == 1) ? &game->p1 : &game->p2;
     Player *other = (player_num == 1) ? &game->p2 : &game->p1;
 
+    // Phase validation
+    if (game->phase == 0 && packet[0] != 'B') {
+        send_packet(current->socket, "E 100");
+        return;
+    }
+    if (game->phase == 1 && packet[0] != 'I') {
+        send_packet(current->socket, "E 101");
+        return;
+    }
+    if (game->phase == 2 && packet[0] != 'S' && packet[0] != 'Q') {
+        send_packet(current->socket, "E 102");
+        return;
+    }
+
     switch(packet[0]) {
         case 'F':
             send_packet(current->socket, "H 0");
             send_packet(other->socket, "H 1");
+            game->phase = 3;
             break;
-            
+
         case 'B':
             if (player_num == 1) {
                 int w, h;
@@ -55,48 +69,100 @@ void handle_packet(GameState *game, char *packet, int player_num) {
                 game->height = h;
             }
             send_packet(current->socket, "A");
+            current->initialized = 1;
+            if (game->p1.initialized && game->p2.initialized) {
+                game->phase = 1;
+            }
             break;
-            
+
         case 'I':
-            if (!game->width || !game->height) {
+            if (!current->initialized) {
                 send_packet(current->socket, "E 101");
                 return;
             }
             send_packet(current->socket, "A");
+            current->initialized = 2;
+            if (game->p1.initialized == 2 && game->p2.initialized == 2) {
+                game->phase = 2;
+                game->current_player = 1;
+            }
             break;
-            
+
         case 'S':
-            if (!current->initialized) {
-                send_packet(current->socket, "E 102");
+            if (game->current_player != player_num) {
+                send_packet(current->socket, "E 103");
                 return;
             }
-            send_packet(current->socket, "A");
+
+            int row, col;
+            if (sscanf(packet, "S %d %d", &row, &col) != 2) {
+                send_packet(current->socket, "E 202");
+                return;
+            }
+
+            if (row < 0 || row >= game->height || col < 0 || col >= game->width) {
+                send_packet(current->socket, "E 400");
+                return;
+            }
+
+            if (current->shots[row][col]) {
+                send_packet(current->socket, "E 401");
+                return;
+            }
+
+            current->shots[row][col] = 1;
+            if (other->board[row][col]) {
+                other->ships_remaining--;
+                char response[32];
+                sprintf(response, "R %d H", other->ships_remaining);
+                send_packet(current->socket, response);
+                
+                if (other->ships_remaining == 0) {
+                    send_packet(current->socket, "H 1");
+                    send_packet(other->socket, "H 0");
+                    game->phase = 3;
+                    return;
+                }
+            } else {
+                char response[32];
+                sprintf(response, "R %d M", other->ships_remaining);
+                send_packet(current->socket, response);
+            }
+            game->current_player = (game->current_player == 1) ? 2 : 1;
             break;
-            
+
         case 'Q':
-            if (!current->initialized) {
-                send_packet(current->socket, "E 102");
+            if (game->current_player != player_num) {
+                send_packet(current->socket, "E 103");
                 return;
             }
-            send_packet(current->socket, "A");
+            char response[BUFFER_SIZE];
+            sprintf(response, "G %d", other->ships_remaining);
+            for (int i = 0; i < game->height; i++) {
+                for (int j = 0; j < game->width; j++) {
+                    if (current->shots[i][j]) {
+                        sprintf(response + strlen(response), " %c %d %d", 
+                                other->board[i][j] ? 'H' : 'M', i, j);
+                    }
+                }
+            }
+            send_packet(current->socket, response);
             break;
-            
-        default:
-            send_packet(current->socket, "E 100");
     }
 }
 
 int main() {
     GameState game = {0};
+    game.phase = 0;
+    
     int server1_fd = socket(AF_INET, SOCK_STREAM, 0);
     int server2_fd = socket(AF_INET, SOCK_STREAM, 0);
     
-    struct sockaddr_in addr1 = {0}, addr2 = {0};
     int opt = 1;
-    
     setsockopt(server1_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     setsockopt(server2_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     
+    struct sockaddr_in addr1 = {0}, addr2 = {0};
     addr1.sin_family = AF_INET;
     addr1.sin_addr.s_addr = INADDR_ANY;
     addr1.sin_port = htons(PORT1);
@@ -123,22 +189,27 @@ int main() {
         FD_SET(game.p2.socket, &readfds);
         
         int maxfd = (game.p1.socket > game.p2.socket) ? game.p1.socket : game.p2.socket;
-        
         select(maxfd + 1, &readfds, NULL, NULL, NULL);
         
         if (FD_ISSET(game.p1.socket, &readfds)) {
             memset(buffer, 0, BUFFER_SIZE);
-            if (read(game.p1.socket, buffer, BUFFER_SIZE) <= 0) break;
+            ssize_t bytes = read(game.p1.socket, buffer, BUFFER_SIZE-1);
+            if (bytes <= 0) break;
+            buffer[bytes] = '\0';
             buffer[strcspn(buffer, "\n")] = 0;
             handle_packet(&game, buffer, 1);
         }
         
         if (FD_ISSET(game.p2.socket, &readfds)) {
             memset(buffer, 0, BUFFER_SIZE);
-            if (read(game.p2.socket, buffer, BUFFER_SIZE) <= 0) break;
+            ssize_t bytes = read(game.p2.socket, buffer, BUFFER_SIZE-1);
+            if (bytes <= 0) break;
+            buffer[bytes] = '\0';
             buffer[strcspn(buffer, "\n")] = 0;
             handle_packet(&game, buffer, 2);
         }
+        
+        if (game.phase == 3) break;
     }
     
     close(game.p1.socket);
