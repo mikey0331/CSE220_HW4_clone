@@ -50,22 +50,21 @@ const int TETRIS_PIECES[7][4][2] = {
 };
 
 void send_exact_response(int socket, const char *msg) {
-    write(socket, msg, strlen(msg));
-    write(socket, "\n", 1);
-}
-
-void send_halt(int socket, int is_winner) {
-    char response[16];
-    sprintf(response, "H %d", is_winner);
+    char response[BUFFER_SIZE];
+    sprintf(response, "%s\n", msg);
     write(socket, response, strlen(response));
-    write(socket, "\n", 1);
 }
 
 void send_shot_response(int socket, int ships_remaining, char result) {
-    char response[32];
-    sprintf(response, "R %d %c", ships_remaining, result);
+    char response[BUFFER_SIZE];
+    sprintf(response, "R %d %c\n", ships_remaining, result);
     write(socket, response, strlen(response));
-    write(socket, "\n", 1);
+}
+
+void send_halt(int socket, int is_winner) {
+    char response[BUFFER_SIZE];
+    sprintf(response, "H %d\n", is_winner);
+    write(socket, response, strlen(response));
 }
 
 void rotate_point(int *row, int *col, int rotation) {
