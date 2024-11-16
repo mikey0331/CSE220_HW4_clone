@@ -53,26 +53,24 @@ const int TETRIS_PIECES[7][4][2] = {
 
 void send_error(int socket, int code) {
     char response[16];
-    sprintf(response, "E %d\n", code);
+    sprintf(response, "E %d", code);
     write(socket, response, strlen(response));
 }
 
 void send_ack(int socket) {
-    write(socket, "A\n", 2);
+    write(socket, "A", 2);
 }
 
 void send_halt(int socket, int is_winner) {
     char response[16];
     sprintf(response, "H %d", is_winner);
     write(socket, response, strlen(response));
-    write(socket, "\n", 1);
 }
 
 void send_shot_response(int socket, int ships_remaining, char result) {
     char response[32];
     sprintf(response, "R %d %c", ships_remaining, result);
     write(socket, response, strlen(response));
-    write(socket, "\n", 1);
 }
 
 void rotate_point(int *row, int *col, int rotation) {
@@ -280,7 +278,6 @@ if(packet[0] == 'F') {
             char response[BUFFER_SIZE];
             build_query_response(game, current, other, response);
             write(current->socket, response, strlen(response));
-            write(current->socket, "\n", 1);
             break;
         }
     }
