@@ -155,64 +155,27 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         return;
     }
 
-    switch(packet[0]) {
-        case 'B': {
-            int w = 0, h = 0;
-            if(sscanf(packet, "B %d %d", &w, &h) != 2 || w < 10 || h < 10) {
-                if(game->phase == 0) {
-                    send_error(current->socket, 200);
-                } else {
-                    send_ack(current->socket);
-                }
-                return;
-            }
-            if(is_p1) {
-                game->width = w;
-                game->height = h;
-            }
-            send_ack(current->socket);
-            current->ready = 1;
-            if(game->p1.ready && game->p2.ready) {
-                game->phase = 1;
-            }
-            break;
+    // Handle B command separately
+    if(packet[0] == 'B' && game->phase == 0) {
+        int w = 0, h = 0;
+        if(sscanf(packet, "B %d %d", &w, &h) != 2 || w < 10 || h < 10) {
+            send_error(current->socket, 200);
+            return;
         }
-        case 'I': {
-            if(game->phase != 1) {
-                send_ack(current->socket);
-                return;
-            }
-            Ship ships[MAX_SHIPS];
-            int result = validate_init(game, packet, ships);
-            if(result != 0) {
-                send_ack(current->socket);
-                return;
-            }
-            place_ships(game, current, ships);
-            send_ack(current->socket);
-            current->ready = 2;
-            if(game->p1.ready == 2 && game->p2.ready == 2) {
-                game->phase = 2;
-            }
-            break;
+        if(is_p1) {
+            game->width = w;
+            game->height = h;
         }
-        case 'S':
-        case 'Q': {
-            if(game->phase != 2) {
-                send_ack(current->socket);
-                return;
-            }
-            if((is_p1 && game->current_turn != 1) || (!is_p1 && game->current_turn != 2)) {
-                send_error(current->socket, 103);
-                return;
-            }
-            send_ack(current->socket);
-            break;
+        send_ack(current->socket);
+        current->ready = 1;
+        if(game->p1.ready && game->p2.ready) {
+            game->phase = 1;
         }
-        default:
-            send_ack(current->socket);
-            break;
+        return;
     }
+
+    // For all other commands, send ack by default
+    send_ack(current->socket);
 }
 
 
