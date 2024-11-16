@@ -4,369 +4,421 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
-#include <sys/select.h>
-#include <errno.h>
-#include <netinet/in.h>
+#include <pthread.h>
 
 #define PORT1 2201
 #define PORT2 2202
 #define BUFFER_SIZE 1024
-#define MAX_SHIPS 5
-#define MAX_BOARD 20
+#define MAX_PIECES 5
+#define BOARD_MAX_SIZE 20
+
+#define ERR_EXPECT_BEGIN 100
+#define ERR_EXPECT_INIT 101
+#define ERR_EXPECT_GAME 102
+#define ERR_BEGIN_PARAMS 200
+#define ERR_INIT_PARAMS 201
+#define ERR_SHOOT_PARAMS 202
+#define ERR_INIT_SHAPE 300
+#define ERR_INIT_ROTATION 301
+#define ERR_INIT_FIT 302
+#define ERR_INIT_OVERLAP 303
+#define ERR_SHOOT_BOUNDS 400
+#define ERR_SHOOT_REPEAT 401
+
+enum GameState {
+    WAITING_BEGIN,
+    WAITING_INIT,
+    IN_GAME
+};
+
+typedef struct {
+    int cells[4][2];
+} PieceShape;
 
 typedef struct {
     int type;
     int rotation;
-    int row;
     int col;
+    int row;
     int hits;
-} Ship;
+    int total_cells;
+    int is_sunk;
+} Piece;
 
 typedef struct {
     int socket;
-    int ready;
-    Ship ships[MAX_SHIPS];
-    int num_ships;
-    int board[MAX_BOARD][MAX_BOARD];
-    int shots[MAX_BOARD][MAX_BOARD];
+    int board[BOARD_MAX_SIZE][BOARD_MAX_SIZE];
+    int shot_board[BOARD_MAX_SIZE][BOARD_MAX_SIZE];
+    Piece pieces[MAX_PIECES];
+    int num_pieces;
+    int is_turn;
     int ships_remaining;
+    enum GameState state;
 } Player;
 
 typedef struct {
-    Player p1;
-    Player p2;
-    int width;
-    int height;
-    int phase;
-    int current_turn;
+    Player player1;
+    Player player2;
+    int board_width;
+    int board_height;
+    int game_active;
+    pthread_mutex_t game_mutex;
 } GameState;
 
-const int TETRIS_PIECES[7][4][2] = {
-    {{0,0}, {0,1}, {0,2}, {0,3}},     // I
-    {{0,0}, {0,1}, {1,0}, {1,1}},     // O
-    {{0,1}, {1,0}, {1,1}, {1,2}},     // T
-    {{0,0}, {1,0}, {2,0}, {2,1}},     // J
-    {{0,0}, {1,0}, {2,0}, {2,-1}},    // L
-    {{0,0}, {0,1}, {1,-1}, {1,0}},    // S
-    {{0,-1}, {0,0}, {1,0}, {1,1}}     // Z
+const PieceShape PIECE_SHAPES[7][4] = {
+    // I piece
+    {{{0,0}, {0,1}, {0,2}, {0,3}}, {{0,0}, {1,0}, {2,0}, {3,0}},
+     {{0,0}, {0,1}, {0,2}, {0,3}}, {{0,0}, {1,0}, {2,0}, {3,0}}},
+    // J piece
+    {{{0,0}, {0,1}, {0,2}, {-1,2}}, {{0,0}, {1,0}, {2,0}, {2,1}},
+     {{0,0}, {1,0}, {0,-1}, {0,-2}}, {{0,0}, {-1,0}, {-2,0}, {-2,-1}}},
+    // L piece
+    {{{0,0}, {0,1}, {0,2}, {1,2}}, {{0,0}, {1,0}, {2,0}, {2,-1}},
+     {{0,0}, {-1,0}, {0,-1}, {0,-2}}, {{0,0}, {-1,0}, {-2,0}, {-2,1}}},
+    // O piece
+    {{{0,0}, {0,1}, {1,0}, {1,1}}, {{0,0}, {0,1}, {1,0}, {1,1}},
+     {{0,0}, {0,1}, {1,0}, {1,1}}, {{0,0}, {0,1}, {1,0}, {1,1}}},
+    // S piece
+    {{{0,0}, {0,1}, {1,1}, {1,2}}, {{0,0}, {1,0}, {1,-1}, {2,-1}},
+     {{0,0}, {0,1}, {1,1}, {1,2}}, {{0,0}, {1,0}, {1,-1}, {2,-1}}},
+    // T piece
+    {{{0,0}, {0,1}, {0,2}, {1,1}}, {{0,0}, {1,0}, {2,0}, {1,1}},
+     {{0,0}, {0,1}, {0,2}, {-1,1}}, {{0,0}, {1,0}, {2,0}, {1,-1}}},
+    // Z piece
+    {{{0,0}, {0,1}, {-1,1}, {-1,2}}, {{0,0}, {1,0}, {1,1}, {2,1}},
+     {{0,0}, {0,1}, {-1,1}, {-1,2}}, {{0,0}, {1,0}, {1,1}, {2,1}}}
 };
 
-void send_error(int socket, int code) {
-    char response[16];
-    sprintf(response, "E %d", code);
-    write(socket, response, strlen(response));
-    write(socket, "\n", 1);
+void init_game(GameState *game) {
+    memset(game, 0, sizeof(GameState));
+    game->player1.ships_remaining = MAX_PIECES;
+    game->player2.ships_remaining = MAX_PIECES;
+    game->player1.is_turn = 1;
+    game->player1.state = WAITING_BEGIN;
+    game->player2.state = WAITING_BEGIN;
+    game->game_active = 1;
+    pthread_mutex_init(&game->game_mutex, NULL);
 }
 
-void send_ack(int socket) {
-    write(socket, "A\n", 2);
+void send_error(int socket, int error_code) {
+    char response[BUFFER_SIZE];
+    sprintf(response, "E %d", error_code);
+    send(socket, response, strlen(response), 0);
 }
-
-void send_halt(int socket, int is_winner) {
-    char response[16];
-    sprintf(response, "H %d", is_winner);
-    write(socket, response, strlen(response));
-    write(socket, "\n", 1);
-}
-
-void send_shot_response(int socket, int ships_remaining, char result) {
-    char response[32];
-    sprintf(response, "R %d %c", ships_remaining, result);
-    write(socket, response, strlen(response));
-    write(socket, "\n", 1);
-}
-
-void rotate_point(int *row, int *col, int rotation) {
-    int temp;
-    for(int i = 0; i < rotation; i++) {
-        temp = *row;
-        *row = -*col;
-        *col = temp;
+int is_valid_placement(GameState *game, Player *player, Piece *piece) {
+    if (piece->type < 0 || piece->type >= 7 || 
+        piece->rotation < 0 || piece->rotation >= 4) {
+        return 0;
     }
+
+    const PieceShape *shape = &PIECE_SHAPES[piece->type][piece->rotation];
+    for (int i = 0; i < 4; i++) {
+        int new_row = piece->row + shape->cells[i][0];
+        int new_col = piece->col + shape->cells[i][1];
+        
+        if (new_row < 0 || new_row >= game->board_height ||
+            new_col < 0 || new_col >= game->board_width ||
+            player->board[new_row][new_col] != 0) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
-int validate_ship_placement(GameState *game, Ship ship, int board[MAX_BOARD][MAX_BOARD]) {
-    int piece_idx = ship.type - 1;
+void place_piece(Player *player, Piece *piece) {
+    const PieceShape *shape = &PIECE_SHAPES[piece->type][piece->rotation];
+    piece->total_cells = 4;
+    piece->hits = 0;
+    piece->is_sunk = 0;
     
-    for(int i = 0; i < 4; i++) {
-        int row = TETRIS_PIECES[piece_idx][i][0];
-        int col = TETRIS_PIECES[piece_idx][i][1];
-        
-        rotate_point(&row, &col, ship.rotation);
-        row += ship.row;
-        col += ship.col;
-        
-        if(row < 0 || row >= game->height || col < 0 || col >= game->width) {
-            return 302;
-        }
-        
-        if(board[row][col]) {
-            return 303;
-        }
-        
-        board[row][col] = 1;
+    for (int i = 0; i < 4; i++) {
+        int new_row = piece->row + shape->cells[i][0];
+        int new_col = piece->col + shape->cells[i][1];
+        player->board[new_row][new_col] = 1;
     }
-    return 0;
 }
 
-int validate_init(GameState *game, char *packet, Ship *ships) {
-    char *token = strtok(packet + 2, " ");
-    for(int i = 0; i < MAX_SHIPS; i++) {
-        if(!token) return 201;
-        ships[i].type = atoi(token);
-        if(ships[i].type < 1 || ships[i].type > 7) return 300;
-        
-        token = strtok(NULL, " ");
-        if(!token) return 201;
-        ships[i].rotation = atoi(token);
-        if(ships[i].rotation < 0 || ships[i].rotation > 3) return 301;
-        
-        token = strtok(NULL, " ");
-        if(!token) return 201;
-        ships[i].row = atoi(token);
-        
-        token = strtok(NULL, " ");
-        if(!token) return 201;
-        ships[i].col = atoi(token);
-        
-        token = strtok(NULL, " ");
-    }
-
-    int board[MAX_BOARD][MAX_BOARD] = {0};
-    for(int i = 0; i < MAX_SHIPS; i++) {
-        int result = validate_ship_placement(game, ships[i], board);
-        if(result != 0) return result;
-    }
-    return 0;
-}
-
-void place_ships(GameState *game, Player *player, Ship *ships) {
-    memset(player->board, 0, sizeof(player->board));
-    for(int i = 0; i < MAX_SHIPS; i++) {
-        int piece_idx = ships[i].type - 1;
-        for(int j = 0; j < 4; j++) {
-            int row = TETRIS_PIECES[piece_idx][j][0];
-            int col = TETRIS_PIECES[piece_idx][j][1];
-            rotate_point(&row, &col, ships[i].rotation);
-            row += ships[i].row;
-            col += ships[i].col;
-            player->board[row][col] = 1;
-        }
-    }
-    player->ships_remaining = MAX_SHIPS * 4;
-}
-
-void process_shot(GameState *game, Player *shooter, Player *target, int row, int col) {
-    shooter->shots[row][col] = 1;
+int handle_begin(GameState *game, Player *player, char *msg) {
+    pthread_mutex_lock(&game->game_mutex);
     
-    if(target->board[row][col]) {
-        target->ships_remaining--;
-        send_shot_response(shooter->socket, target->ships_remaining, 'H');
+    if (player->state != WAITING_BEGIN) {
+        send_error(player->socket, ERR_EXPECT_BEGIN);
+        pthread_mutex_unlock(&game->game_mutex);
+        return 0;
+    }
+
+    if (player == &game->player1) {
+        int width, height;
+        if (sscanf(msg, "B %d %d", &width, &height) != 2 || width < 10 || height < 10) {
+            send_error(player->socket, ERR_BEGIN_PARAMS);
+            pthread_mutex_unlock(&game->game_mutex);
+            return 0;
+        }
+        game->board_width = width;
+        game->board_height = height;
+    } else {
+        if (strlen(msg) > 2) {
+            send_error(player->socket, ERR_BEGIN_PARAMS);
+            pthread_mutex_unlock(&game->game_mutex);
+            return 0;
+        }
+    }
+    
+    player->state = WAITING_INIT;
+    send(player->socket, "A", 1, 0);
+    pthread_mutex_unlock(&game->game_mutex);
+    return 1;
+}
+
+int handle_initialize(GameState *game, Player *player, char *msg) {
+    pthread_mutex_lock(&game->game_mutex);
+    
+    if (player->state != WAITING_INIT) {
+        send_error(player->socket, ERR_EXPECT_INIT);
+        pthread_mutex_unlock(&game->game_mutex);
+        return 0;
+    }
+
+    if (player->num_pieces >= MAX_PIECES) {
+        send_error(player->socket, ERR_INIT_PARAMS);
+        pthread_mutex_unlock(&game->game_mutex);
+        return 0;
+    }
+    
+    Piece piece;
+    if (sscanf(msg, "I %d %d %d %d", &piece.type, &piece.rotation, 
+               &piece.col, &piece.row) != 4) {
+        send_error(player->socket, ERR_INIT_PARAMS);
+        pthread_mutex_unlock(&game->game_mutex);
+        return 0;
+    }
+    
+    if (!is_valid_placement(game, player, &piece)) {
+        send_error(player->socket, ERR_INIT_FIT);
+        pthread_mutex_unlock(&game->game_mutex);
+        return 0;
+    }
+    
+    place_piece(player, &piece);
+    player->pieces[player->num_pieces++] = piece;
+    
+    if (player->num_pieces == MAX_PIECES) {
+        player->state = IN_GAME;
+    }
+    
+    send(player->socket, "A", 1, 0);
+    pthread_mutex_unlock(&game->game_mutex);
+    return 1;
+}
+
+void check_ship_sunk(Player *defender, int row, int col) {
+    for (int i = 0; i < defender->num_pieces; i++) {
+        const PieceShape *shape = &PIECE_SHAPES[defender->pieces[i].type][defender->pieces[i].rotation];
+        for (int j = 0; j < 4; j++) {
+            int ship_row = defender->pieces[i].row + shape->cells[j][0];
+            int ship_col = defender->pieces[i].col + shape->cells[j][1];
+            
+            if (row == ship_row && col == ship_col) {
+                defender->pieces[i].hits++;
+                if (defender->pieces[i].hits == defender->pieces[i].total_cells) {
+                    defender->pieces[i].is_sunk = 1;
+                    defender->ships_remaining--;
+                }
+                return;
+            }
+        }
+    }
+}
+
+int handle_shoot(GameState *game, Player *attacker, Player *defender, char *msg) {
+    pthread_mutex_lock(&game->game_mutex);
+    
+    if (attacker->state != IN_GAME || !attacker->is_turn) {
+        send_error(attacker->socket, ERR_EXPECT_GAME);
+        pthread_mutex_unlock(&game->game_mutex);
+        return -1;
+    }
+    
+    int row, col;
+    if (sscanf(msg, "S %d %d", &row, &col) != 2) {
+        send_error(attacker->socket, ERR_SHOOT_PARAMS);
+        pthread_mutex_unlock(&game->game_mutex);
+        return -1;
+    }
+    
+    if (row < 0 || row >= game->board_height || 
+        col < 0 || col >= game->board_width) {
+        send_error(attacker->socket, ERR_SHOOT_BOUNDS);
+        pthread_mutex_unlock(&game->game_mutex);
+        return -1;
+    }
+    
+    if (attacker->shot_board[row][col] != 0) {
+        send_error(attacker->socket, ERR_SHOOT_REPEAT);
+        pthread_mutex_unlock(&game->game_mutex);
+        return -1;
+    }
+    
+    char response[BUFFER_SIZE];
+    if (defender->board[row][col] == 1) {
+        defender->board[row][col] = 2;
+        attacker->shot_board[row][col] = 1;
+        check_ship_sunk(defender, row, col);
+        sprintf(response, "R %d H", defender->ships_remaining);
+        send(attacker->socket, response, strlen(response), 0);
         
-        if(target->ships_remaining == 0) {
-            game->phase = 3;
-            return;
+        if (defender->ships_remaining == 0) {
+            send(defender->socket, "H 0", 3, 0);
+            send(attacker->socket, "H 1", 3, 0);
+            game->game_active = 0;
         }
     } else {
-        send_shot_response(shooter->socket, target->ships_remaining, 'M');
+        attacker->shot_board[row][col] = 2;
+        sprintf(response, "R %d M", defender->ships_remaining);
+        send(attacker->socket, response, strlen(response), 0);
     }
     
-    game->current_turn = (game->current_turn == 1) ? 2 : 1;
+    attacker->is_turn = 0;
+    defender->is_turn = 1;
+    
+    pthread_mutex_unlock(&game->game_mutex);
+    return 1;
 }
 
-void build_query_response(GameState *game, Player *player, Player *opponent, char *response) {
-    sprintf(response, "G %d", opponent->ships_remaining);
-    for(int i = 0; i < game->height; i++) {
-        for(int j = 0; j < game->width; j++) {
-            if(player->shots[i][j]) {
-                char temp[32];
-                sprintf(temp, " %c %d %d", opponent->board[i][j] ? 'H' : 'M', i, j);
-                strcat(response, temp);
+void handle_query(GameState *game, Player *player) {
+    if (player->state != IN_GAME) {
+        send_error(player->socket, ERR_EXPECT_GAME);
+        return;
+    }
+
+    char response[BUFFER_SIZE];
+    int offset = 0;
+    Player *opponent = (player == &game->player1) ? &game->player2 : &game->player1;
+    
+    offset += sprintf(response, "G %d ", opponent->ships_remaining);
+    
+    for (int i = 0; i < game->board_height; i++) {
+        for (int j = 0; j < game->board_width; j++) {
+            if (player->shot_board[i][j] > 0) {
+                offset += sprintf(response + offset, "%c %d %d ", 
+                    player->shot_board[i][j] == 1 ? 'H' : 'M', j, i);
             }
         }
     }
+    
+    send(player->socket, response, strlen(response), 0);
 }
 
-void process_packet(GameState *game, char *packet, int is_p1) {
-    Player *current = is_p1 ? &game->p1 : &game->p2;
-    Player *other = is_p1 ? &game->p2 : &game->p1;
-
-    if(packet[0] == 'F') {
-        send_halt(current->socket, 0);
-        game->current_turn = (game->current_turn == 1) ? 2 : 1;
-        game->phase = 3;
-        return;
+void handle_forfeit(GameState *game, Player *player) {
+    pthread_mutex_lock(&game->game_mutex);
+    game->game_active = 0;
+    
+    if (player == &game->player1) {
+        send(game->player1.socket, "H 0", 3, 0);
+        send(game->player2.socket, "H 1", 3, 0);
+    } else {
+        send(game->player1.socket, "H 1", 3, 0);
+        send(game->player2.socket, "H 0", 3, 0);
     }
+    
+    pthread_mutex_unlock(&game->game_mutex);
+}
 
-    if(game->phase == 0 && packet[0] != 'B') {
-        send_error(current->socket, 100);
-        return;
-    }
-    if(game->phase == 1 && packet[0] != 'I') {
-        send_error(current->socket, 101);
-        return;
-    }
-    if(game->phase == 2 && packet[0] != 'S' && packet[0] != 'Q') {
-        send_error(current->socket, 102);
-        return;
-    }
-
-    switch(packet[0]) {
-        case 'B': {
-            if(is_p1) {
-                int w, h;
-                if(sscanf(packet, "B %d %d", &w, &h) != 2 || w < 10 || h < 10) {
-                    send_error(current->socket, 200);
-                    return;
-                }
-                game->width = w;
-                game->height = h;
-            }
-            send_ack(current->socket);
-            current->ready = 1;
-            if(game->p1.ready && game->p2.ready) {
-                game->phase = 1;
-            }
-            break;
-        }
-
-        case 'I': {
-            Ship ships[MAX_SHIPS];
-            int error = validate_init(game, packet, ships);
-            if(error) {
-                send_error(current->socket, error);
-                return;
-            }
-            place_ships(game, current, ships);
-            send_ack(current->socket);
-            current->ready = 2;
-            if(game->p1.ready == 2 && game->p2.ready == 2) {
-                game->phase = 2;
-            }
-            break;
-        }
-
-        case 'S': {
-            if((is_p1 && game->current_turn != 1) || (!is_p1 && game->current_turn != 2)) {
-                return;
-            }
-            int row, col;
-            if(sscanf(packet, "S %d %d", &row, &col) != 2) {
-                send_error(current->socket, 202);
-                return;
-            }
-            if(row < 0 || row >= game->height || col < 0 || col >= game->width) {
-                send_error(current->socket, 400);
-                return;
-            }
-            if(current->shots[row][col]) {
-                send_error(current->socket, 401);
-                return;
-            }
-            process_shot(game, current, other, row, col);
-            break;
-        }
-
-        case 'Q': {
-            if((is_p1 && game->current_turn != 1) || (!is_p1 && game->current_turn != 2)) {
-                return;
-            }
-            char response[BUFFER_SIZE];
-            build_query_response(game, current, other, response);
-            write(current->socket, response, strlen(response));
-            write(current->socket, "\n", 1);
-            break;
+void *handle_client(void *arg) {
+    GameState *game = (GameState *)arg;
+    Player *player = (game->player1.socket == 0) ? &game->player1 : &game->player2;
+    Player *opponent = (player == &game->player1) ? &game->player2 : &game->player1;
+    char buffer[BUFFER_SIZE];
+    
+    while (game->game_active) {
+        memset(buffer, 0, BUFFER_SIZE);
+        int bytes_read = read(player->socket, buffer, BUFFER_SIZE - 1);
+        
+        if (bytes_read <= 0) break;
+        
+        switch(buffer[0]) {
+            case 'B':
+                handle_begin(game, player, buffer);
+                break;
+            case 'I':
+                handle_initialize(game, player, buffer);
+                break;
+            case 'S':
+                handle_shoot(game, player, opponent, buffer);
+                break;
+            case 'Q':
+                handle_query(game, player);
+                break;
+            case 'F':
+                handle_forfeit(game, player);
+                break;
+            default:
+                send_error(player->socket, ERR_EXPECT_GAME);
+                break;
         }
     }
+    return NULL;
 }
 
 int main() {
-    GameState game = {0};
-    game.phase = 0;
-    game.current_turn = 1;
-    
-    int server1_fd = socket(AF_INET, SOCK_STREAM, 0);
-    int server2_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (server1_fd < 0 || server2_fd < 0) {
-        perror("Socket creation failed");
-        exit(1);
-    }
-    
+    int server_fd1, server_fd2;
+    struct sockaddr_in address1, address2;
     int opt = 1;
-    setsockopt(server1_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    setsockopt(server2_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    int addrlen = sizeof(address1);
+    pthread_t thread1, thread2;
+    GameState game;
     
-    struct sockaddr_in addr1 = {0}, addr2 = {0};
+    init_game(&game);
     
-    addr1.sin_family = AF_INET;
-    addr1.sin_addr.s_addr = INADDR_ANY;
-    addr1.sin_port = htons(2201);
-    
-    addr2.sin_family = AF_INET;
-    addr2.sin_addr.s_addr = INADDR_ANY;
-    addr2.sin_port = htons(2202);
-    
-    if (bind(server1_fd, (struct sockaddr *)&addr1, sizeof(addr1)) < 0) {
-        perror("Bind failed for player 1");
-        exit(1);
+    if ((server_fd1 = socket(AF_INET, SOCK_STREAM, 0)) == 0 ||
+        (server_fd2 = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
     }
     
-    if (bind(server2_fd, (struct sockaddr *)&addr2, sizeof(addr2)) < 0) {
-        perror("Bind failed for player 2");
-        exit(1);
+    setsockopt(server_fd1, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    setsockopt(server_fd2, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    
+    address1.sin_family = AF_INET;
+    address1.sin_addr.s_addr = INADDR_ANY;
+    address1.sin_port = htons(PORT1);
+    
+    address2.sin_family = AF_INET;
+    address2.sin_addr.s_addr = INADDR_ANY;
+    address2.sin_port = htons(PORT2);
+    
+    if (bind(server_fd1, (struct sockaddr *)&address1, sizeof(address1)) < 0 ||
+        bind(server_fd2, (struct sockaddr *)&address2, sizeof(address2)) < 0) {
+        perror("Bind failed");
+        exit(EXIT_FAILURE);
     }
     
-    listen(server1_fd, 1);
-    listen(server2_fd, 1);
-    
-    game.p1.socket = accept(server1_fd, NULL, NULL);
-    game.p2.socket = accept(server2_fd, NULL, NULL);
-    
-    char buffer[BUFFER_SIZE];
-    fd_set readfds;
-    
-    while(1) {
-        FD_ZERO(&readfds);
-        FD_SET(game.p1.socket, &readfds);
-        FD_SET(game.p2.socket, &readfds);
-        
-        int maxfd = (game.p1.socket > game.p2.socket) ? game.p1.socket : game.p2.socket;
-        select(maxfd + 1, &readfds, NULL, NULL, NULL);
-        
-        if(FD_ISSET(game.p1.socket, &readfds)) {
-            memset(buffer, 0, BUFFER_SIZE);
-            ssize_t bytes = read(game.p1.socket, buffer, BUFFER_SIZE-1);
-            if(bytes <= 0) break;
-            buffer[bytes] = '\0';
-            buffer[strcspn(buffer, "\n")] = '\0';
-            process_packet(&game, buffer, 1);
-        }
-        
-        if(FD_ISSET(game.p2.socket, &readfds)) {
-            memset(buffer, 0, BUFFER_SIZE);
-            ssize_t bytes = read(game.p2.socket, buffer, BUFFER_SIZE-1);
-            if(bytes <= 0) break;
-            buffer[bytes] = '\0';
-            buffer[strcspn(buffer, "\n")] = '\0';
-            process_packet(&game, buffer, 0);
-        }
-        
-        if(game.phase == 3) {
-            if(game.current_turn == 1) {
-                send_halt(game.p1.socket, 1);
-                send_halt(game.p2.socket, 0);
-            } else {
-                send_halt(game.p1.socket, 0);
-                send_halt(game.p2.socket, 1);
-            }
-            break;
-        }
+    if (listen(server_fd1, 1) < 0 || listen(server_fd2, 1) < 0) {
+        perror("Listen failed");
+        exit(EXIT_FAILURE);
     }
     
-    close(game.p1.socket);
-    close(game.p2.socket);
-    close(server1_fd);
-    close(server2_fd);
+    game.player1.socket = accept(server_fd1, (struct sockaddr *)&address1, 
+                               (socklen_t*)&addrlen);
+    game.player2.socket = accept(server_fd2, (struct sockaddr *)&address2, 
+                               (socklen_t*)&addrlen);
+    
+    if (game.player1.socket < 0 || game.player2.socket < 0) {
+        perror("Accept failed");
+        exit(EXIT_FAILURE);
+    }
+    
+    pthread_create(&thread1, NULL, handle_client, &game);
+    pthread_create(&thread2, NULL, handle_client, &game);
+    
+    pthread_join(thread1, NULL);
+    pthread_join(thread2, NULL);
+    
+    close(server_fd1);
+    close(server_fd2);
+    close(game.player1.socket);
+    close(game.player2.socket);
+    pthread_mutex_destroy(&game.game_mutex);
     
     return 0;
 }
