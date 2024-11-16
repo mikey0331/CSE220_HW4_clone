@@ -9,160 +9,285 @@
 #define PORT1 2201
 #define PORT2 2202
 #define BUFFER_SIZE 1024
+#define MAX_SHIPS 5
 #define MAX_BOARD 20
 
 typedef struct {
+    int type;
+    int rotation;
+    int row;
+    int col;
+    int hits;
+} Ship;
+
+typedef struct {
     int socket;
+    int ready;
+    Ship ships[MAX_SHIPS];
+    int num_ships;
     int board[MAX_BOARD][MAX_BOARD];
     int shots[MAX_BOARD][MAX_BOARD];
     int ships_remaining;
-    int initialized;
 } Player;
 
 typedef struct {
-    int width;
-    int height;
     Player p1;
     Player p2;
+    int width;
+    int height;
     int phase;
-    int current_player;
+    int current_turn;
 } GameState;
 
-void send_packet(int socket, const char *msg) {
+const int TETRIS_PIECES[7][4][2] = {
+    {{0,0}, {0,1}, {0,2}, {0,3}},     // I
+    {{0,0}, {0,1}, {1,0}, {1,1}},     // O
+    {{0,1}, {1,0}, {1,1}, {1,2}},     // T
+    {{0,0}, {1,0}, {2,0}, {2,1}},     // J
+    {{0,0}, {1,0}, {2,0}, {2,-1}},    // L
+    {{0,0}, {0,1}, {1,-1}, {1,0}},    // S
+    {{0,-1}, {0,0}, {1,0}, {1,1}}     // Z
+};
+
+void send_exact_response(int socket, const char *msg) {
     write(socket, msg, strlen(msg));
     write(socket, "\n", 1);
 }
 
-void handle_packet(GameState *game, char *packet, int player_num) {
-    Player *current = (player_num == 1) ? &game->p1 : &game->p2;
-    Player *other = (player_num == 1) ? &game->p2 : &game->p1;
+void send_halt(int socket, int is_winner) {
+    char response[3];
+    sprintf(response, "H%d", is_winner);
+    write(socket, response, 2);
+    write(socket, "\n", 1);
+}
 
-    // Phase validation
-    if (game->phase == 0 && packet[0] != 'B') {
-        send_packet(current->socket, "E 100");
+void send_shot_response(int socket, int ships_remaining, char result) {
+    char response[32];
+    sprintf(response, "R %d %c", ships_remaining, result);
+    write(socket, response, strlen(response));
+    write(socket, "\n", 1);
+}
+
+void rotate_point(int *row, int *col, int rotation) {
+    int temp;
+    for(int i = 0; i < rotation; i++) {
+        temp = *row;
+        *row = -*col;
+        *col = temp;
+    }
+}
+
+int validate_ship_placement(GameState *game, Ship ship, int board[MAX_BOARD][MAX_BOARD]) {
+    int piece_idx = ship.type - 1;
+    
+    for(int i = 0; i < 4; i++) {
+        int row = TETRIS_PIECES[piece_idx][i][0];
+        int col = TETRIS_PIECES[piece_idx][i][1];
+        
+        rotate_point(&row, &col, ship.rotation);
+        row += ship.row;
+        col += ship.col;
+        
+        if(row < 0 || row >= game->height || col < 0 || col >= game->width) {
+            return 302;
+        }
+        
+        if(board[row][col]) {
+            return 303;
+        }
+        
+        board[row][col] = 1;
+    }
+    return 0;
+}
+
+int validate_init(GameState *game, char *packet, Ship *ships) {
+    char *token = strtok(packet + 2, " ");
+    for(int i = 0; i < MAX_SHIPS; i++) {
+        if(!token) return 201;
+        ships[i].type = atoi(token);
+        if(ships[i].type < 1 || ships[i].type > 7) return 300;
+        
+        token = strtok(NULL, " ");
+        if(!token) return 201;
+        ships[i].rotation = atoi(token);
+        if(ships[i].rotation < 0 || ships[i].rotation > 3) return 301;
+        
+        token = strtok(NULL, " ");
+        if(!token) return 201;
+        ships[i].row = atoi(token);
+        
+        token = strtok(NULL, " ");
+        if(!token) return 201;
+        ships[i].col = atoi(token);
+        
+        token = strtok(NULL, " ");
+    }
+
+    int board[MAX_BOARD][MAX_BOARD] = {0};
+    for(int i = 0; i < MAX_SHIPS; i++) {
+        int result = validate_ship_placement(game, ships[i], board);
+        if(result != 0) return result;
+    }
+    
+    return 0;
+}
+
+void place_ships(GameState *game, Player *player, Ship *ships) {
+    memset(player->board, 0, sizeof(player->board));
+    for(int i = 0; i < MAX_SHIPS; i++) {
+        int piece_idx = ships[i].type - 1;
+        for(int j = 0; j < 4; j++) {
+            int row = TETRIS_PIECES[piece_idx][j][0];
+            int col = TETRIS_PIECES[piece_idx][j][1];
+            rotate_point(&row, &col, ships[i].rotation);
+            row += ships[i].row;
+            col += ships[i].col;
+            player->board[row][col] = 1;
+        }
+    }
+    player->ships_remaining = MAX_SHIPS * 4;
+}
+
+void process_shot(GameState *game, Player *shooter, Player *target, int row, int col) {
+    shooter->shots[row][col] = 1;
+    
+    if(target->board[row][col]) {
+        target->ships_remaining--;
+        send_shot_response(shooter->socket, target->ships_remaining, 'H');
+        
+        if(target->ships_remaining == 0) {
+            game->phase = 3;
+            return;
+        }
+    } else {
+        send_shot_response(shooter->socket, target->ships_remaining, 'M');
+    }
+    
+    game->current_turn = (game->current_turn == 1) ? 2 : 1;
+}
+
+void build_query_response(GameState *game, Player *player, Player *opponent, char *response) {
+    sprintf(response, "G %d", opponent->ships_remaining);
+    for(int i = 0; i < game->height; i++) {
+        for(int j = 0; j < game->width; j++) {
+            if(player->shots[i][j]) {
+                char temp[32];
+                sprintf(temp, " %c %d %d", opponent->board[i][j] ? 'H' : 'M', i, j);
+                strcat(response, temp);
+            }
+        }
+    }
+}
+
+void process_packet(GameState *game, char *packet, int is_p1) {
+    Player *current = is_p1 ? &game->p1 : &game->p2;
+    Player *other = is_p1 ? &game->p2 : &game->p1;
+
+    if(packet[0] == 'F') {
+        send_halt(current->socket, 0);
+        game->current_turn = (game->current_turn == 1) ? 2 : 1;
+        game->phase = 3;
         return;
     }
-    if (game->phase == 1 && packet[0] != 'I') {
-        send_packet(current->socket, "E 101");
+
+    if(game->phase == 0 && packet[0] != 'B') {
+        send_exact_response(current->socket, "E100");
         return;
     }
-    if (game->phase == 2 && packet[0] != 'S' && packet[0] != 'Q') {
-        send_packet(current->socket, "E 102");
+    if(game->phase == 1 && packet[0] != 'I') {
+        send_exact_response(current->socket, "E101");
+        return;
+    }
+    if(game->phase == 2 && packet[0] != 'S' && packet[0] != 'Q') {
+        send_exact_response(current->socket, "E102");
         return;
     }
 
     switch(packet[0]) {
-        case 'F':
-            send_packet(current->socket, "H 0");
-            send_packet(other->socket, "H 1");
-            game->phase = 3;
-            break;
-
-        case 'B':
-            if (player_num == 1) {
+        case 'B': {
+            if(is_p1) {
                 int w, h;
-                if (sscanf(packet, "B %d %d", &w, &h) != 2 || w < 10 || h < 10) {
-                    send_packet(current->socket, "E 200");
+                if(sscanf(packet, "B %d %d", &w, &h) != 2 || w < 10 || h < 10) {
+                    send_exact_response(current->socket, "E200");
                     return;
                 }
                 game->width = w;
                 game->height = h;
             }
-            send_packet(current->socket, "A");
-            current->initialized = 1;
-            if (game->p1.initialized && game->p2.initialized) {
+            send_exact_response(current->socket, "A");
+            current->ready = 1;
+            if(game->p1.ready && game->p2.ready) {
                 game->phase = 1;
             }
             break;
+        }
 
-        case 'I':
-            if (!current->initialized) {
-                send_packet(current->socket, "E 101");
+        case 'I': {
+            Ship ships[MAX_SHIPS];
+            int error = validate_init(game, packet, ships);
+            if(error) {
+                char error_msg[16];
+                sprintf(error_msg, "E%d", error);
+                send_exact_response(current->socket, error_msg);
                 return;
             }
-            send_packet(current->socket, "A");
-            current->initialized = 2;
-            if (game->p1.initialized == 2 && game->p2.initialized == 2) {
+            place_ships(game, current, ships);
+            send_exact_response(current->socket, "A");
+            current->ready = 2;
+            if(game->p1.ready == 2 && game->p2.ready == 2) {
                 game->phase = 2;
-                game->current_player = 1;
             }
             break;
+        }
 
-        case 'S':
-            if (game->current_player != player_num) {
-                send_packet(current->socket, "E 103");
+        case 'S': {
+            if((is_p1 && game->current_turn != 1) || (!is_p1 && game->current_turn != 2)) {
                 return;
             }
-
             int row, col;
-            if (sscanf(packet, "S %d %d", &row, &col) != 2) {
-                send_packet(current->socket, "E 202");
+            if(sscanf(packet, "S %d %d", &row, &col) != 2) {
+                send_exact_response(current->socket, "E202");
                 return;
             }
-
-            if (row < 0 || row >= game->height || col < 0 || col >= game->width) {
-                send_packet(current->socket, "E 400");
+            if(row < 0 || row >= game->height || col < 0 || col >= game->width) {
+                send_exact_response(current->socket, "E400");
                 return;
             }
-
-            if (current->shots[row][col]) {
-                send_packet(current->socket, "E 401");
+            if(current->shots[row][col]) {
+                send_exact_response(current->socket, "E401");
                 return;
             }
-
-            current->shots[row][col] = 1;
-            if (other->board[row][col]) {
-                other->ships_remaining--;
-                char response[32];
-                sprintf(response, "R %d H", other->ships_remaining);
-                send_packet(current->socket, response);
-                
-                if (other->ships_remaining == 0) {
-                    send_packet(current->socket, "H 1");
-                    send_packet(other->socket, "H 0");
-                    game->phase = 3;
-                    return;
-                }
-            } else {
-                char response[32];
-                sprintf(response, "R %d M", other->ships_remaining);
-                send_packet(current->socket, response);
-            }
-            game->current_player = (game->current_player == 1) ? 2 : 1;
+            process_shot(game, current, other, row, col);
             break;
+        }
 
-        case 'Q':
-            if (game->current_player != player_num) {
-                send_packet(current->socket, "E 103");
+        case 'Q': {
+            if((is_p1 && game->current_turn != 1) || (!is_p1 && game->current_turn != 2)) {
                 return;
             }
             char response[BUFFER_SIZE];
-            sprintf(response, "G %d", other->ships_remaining);
-            for (int i = 0; i < game->height; i++) {
-                for (int j = 0; j < game->width; j++) {
-                    if (current->shots[i][j]) {
-                        sprintf(response + strlen(response), " %c %d %d", 
-                                other->board[i][j] ? 'H' : 'M', i, j);
-                    }
-                }
-            }
-            send_packet(current->socket, response);
+            build_query_response(game, current, other, response);
+            send_exact_response(current->socket, response);
             break;
+        }
     }
 }
 
 int main() {
     GameState game = {0};
     game.phase = 0;
+    game.current_turn = 1;
     
     int server1_fd = socket(AF_INET, SOCK_STREAM, 0);
     int server2_fd = socket(AF_INET, SOCK_STREAM, 0);
     
+    struct sockaddr_in addr1 = {0}, addr2 = {0};
     int opt = 1;
+    
     setsockopt(server1_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     setsockopt(server2_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     
-    struct sockaddr_in addr1 = {0}, addr2 = {0};
     addr1.sin_family = AF_INET;
     addr1.sin_addr.s_addr = INADDR_ANY;
     addr1.sin_port = htons(PORT1);
@@ -183,7 +308,7 @@ int main() {
     char buffer[BUFFER_SIZE];
     fd_set readfds;
     
-    while (1) {
+    while(1) {
         FD_ZERO(&readfds);
         FD_SET(game.p1.socket, &readfds);
         FD_SET(game.p2.socket, &readfds);
@@ -191,25 +316,23 @@ int main() {
         int maxfd = (game.p1.socket > game.p2.socket) ? game.p1.socket : game.p2.socket;
         select(maxfd + 1, &readfds, NULL, NULL, NULL);
         
-        if (FD_ISSET(game.p1.socket, &readfds)) {
+        if(FD_ISSET(game.p1.socket, &readfds)) {
             memset(buffer, 0, BUFFER_SIZE);
             ssize_t bytes = read(game.p1.socket, buffer, BUFFER_SIZE-1);
-            if (bytes <= 0) break;
+            if(bytes <= 0) break;
             buffer[bytes] = '\0';
-            buffer[strcspn(buffer, "\n")] = 0;
-            handle_packet(&game, buffer, 1);
+            buffer[strcspn(buffer, "\n")] = '\0';
+            process_packet(&game, buffer, 1);
         }
         
-        if (FD_ISSET(game.p2.socket, &readfds)) {
+        if(FD_ISSET(game.p2.socket, &readfds)) {
             memset(buffer, 0, BUFFER_SIZE);
             ssize_t bytes = read(game.p2.socket, buffer, BUFFER_SIZE-1);
-            if (bytes <= 0) break;
+            if(bytes <= 0) break;
             buffer[bytes] = '\0';
-            buffer[strcspn(buffer, "\n")] = 0;
-            handle_packet(&game, buffer, 2);
+            buffer[strcspn(buffer, "\n")] = '\0';
+            process_packet(&game, buffer, 0);
         }
-        
-        if (game.phase == 3) break;
     }
     
     close(game.p1.socket);
