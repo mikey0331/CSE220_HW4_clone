@@ -57,7 +57,8 @@ void send_exact_response(int socket, const char *msg) {
 void send_halt(int socket, int is_winner) {
     char response[16];
     sprintf(response, "H %d", is_winner);
-    send_exact_response(socket, response);
+    write(socket, response, strlen(response));
+    write(socket, "\n", 1);
 }
 
 void send_shot_response(int socket, int ships_remaining, char result) {
