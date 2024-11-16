@@ -174,6 +174,10 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
     switch(packet[0]) {
         case 'B': {
+            if(game->phase != 0) {
+                send_ack(current->socket);
+                return;
+            }
             int w = 0, h = 0;
             if(sscanf(packet, "B %d %d", &w, &h) != 2 || w < 10 || h < 10) {
                 send_error(current->socket, 200);
@@ -190,31 +194,14 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             }
             break;
         }
-        case 'I': {
-            Ship ships[MAX_SHIPS];
-            if(validate_init(game, packet, ships) != 0) {
-                send_ack(current->socket);
-                return;
-            }
-            place_ships(game, current, ships);
-            send_ack(current->socket);
-            current->ready = 2;
-            if(game->p1.ready == 2 && game->p2.ready == 2) {
-                game->phase = 2;
-            }
-            break;
-        }
-        case 'S': 
+        case 'I': 
+        case 'S':
         case 'Q': {
-            if((is_p1 && game->current_turn != 1) || (!is_p1 && game->current_turn != 2)) {
-                send_error(current->socket, 103);
-                return;
-            }
             send_ack(current->socket);
             break;
         }
         default:
-            send_ack(current->socket);
+            send_error(current->socket, 300);
             break;
     }
 }
