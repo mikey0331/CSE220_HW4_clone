@@ -191,29 +191,21 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         return;
     }
 
-    if(game->phase == 0) {
-        if(packet[0] != 'B') {
-            send_error(current->socket, 300);
-            return;
-        }
-    } else if(game->phase == 1) {
-        if(packet[0] != 'I') {
-            send_error(current->socket, 301);
-            return;
-        }
-    } else if(game->phase == 2) {
-        if(packet[0] != 'S' && packet[0] != 'Q') {
-            send_error(current->socket, 302);
-            return;
-        }
+    if(packet[0] != 'B' && packet[0] != 'I' && packet[0] != 'S' && 
+       packet[0] != 'Q' && packet[0] != 'F') {
+        send_error(current->socket, 300);
+        return;
     }
 
     switch(packet[0]) {
         case 'B': {
             if(is_p1) {
                 int w = 0, h = 0;
-                int params = sscanf(packet, "B %d %d", &w, &h);
-                if(params != 2 || w < 10 || h < 10) {
+                if(sscanf(packet, "B %d %d", &w, &h) != 2) {
+                    send_error(current->socket, 200);
+                    return;
+                }
+                if(w < 10 || h < 10) {
                     send_error(current->socket, 200);
                     return;
                 }
@@ -231,7 +223,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             Ship ships[MAX_SHIPS];
             int error = validate_init(game, packet, ships);
             if(error) {
-                send_error(current->socket, error);
+                send_error(current->socket, 201);
                 return;
             }
             place_ships(game, current, ships);
@@ -275,6 +267,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         }
     }
 }
+
 
 int main() {
     GameState game = {0};
