@@ -213,23 +213,29 @@ if(packet[0] == 'F') {
     }
 
     switch(packet[0]) {
-        case 'B': {
-            if(is_p1) {
-                int w, h;
-                if(sscanf(packet, "B %d %d", &w, &h) != 2 || w < 10 || h < 10) {
-                    send_error(current->socket, 200);
-                    return;
-                }
-                game->width = w;
-                game->height = h;
-            }
-            send_ack(current->socket);
-            current->ready = 1;
-            if(game->p1.ready && game->p2.ready) {
-                game->phase = 1;
-            }
-            break;
+    case 'B': {
+    if(is_p1) {
+        int w, h, params;
+        params = sscanf(packet, "B %d %d", &w, &h);
+        if(params != 2) {
+            send_error(current->socket, 200);
+            return;
         }
+        if(w < 10 || h < 10) {
+            send_error(current->socket, 200);
+            return;
+        }
+        game->width = w;
+        game->height = h;
+    }
+    send_ack(current->socket);
+    current->ready = 1;
+    if(game->p1.ready && game->p2.ready) {
+        game->phase = 1;
+    }
+    break;
+}
+
 
         case 'I': {
             Ship ships[MAX_SHIPS];
