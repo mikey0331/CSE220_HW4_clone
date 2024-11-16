@@ -192,7 +192,6 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
     if(packet[0] == 'F') {
         send_halt(current->socket, 0);
-        game->current_turn = (game->current_turn == 1) ? 2 : 1;
         game->phase = 3;
         return;
     }
@@ -249,6 +248,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
         case 'S': {
             if((is_p1 && game->current_turn != 1) || (!is_p1 && game->current_turn != 2)) {
+                send_exact_response(current->socket, "E 103");
                 return;
             }
             int row, col;
@@ -270,6 +270,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
         case 'Q': {
             if((is_p1 && game->current_turn != 1) || (!is_p1 && game->current_turn != 2)) {
+                send_exact_response(current->socket, "E 103");
                 return;
             }
             char response[BUFFER_SIZE];
@@ -279,6 +280,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         }
     }
 }
+
 
 int main() {
     GameState game = {0};
