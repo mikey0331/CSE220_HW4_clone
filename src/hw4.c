@@ -192,7 +192,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
     Player *other = is_p1 ? &game->p2 : &game->p1;
 
 if(packet[0] == 'F') {
-    send_halt(current->socket, 0);  // Only send to forfeiting player
+    send_halt(current->socket, 0);  // Sends "H0" to P1
     game->phase = 3;
     return;
 }
@@ -353,13 +353,6 @@ int main() {
         }
         
         if(game.phase == 3) {
-            if(game.current_turn == 1) {
-                send_halt(game.p1.socket, 1);
-                send_halt(game.p2.socket, 0);
-            } else {
-                send_halt(game.p1.socket, 0);
-                send_halt(game.p2.socket, 1);
-            }
             break;
         }
     }
