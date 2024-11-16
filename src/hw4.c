@@ -304,14 +304,14 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    if (setsockopt(server1_fd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt))) {
-        perror("setsockopt 1");
-        exit(EXIT_FAILURE);
-    }
-    if (setsockopt(server2_fd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt))) {
-        perror("setsockopt 2");
-        exit(EXIT_FAILURE);
-    }
+    if (setsockopt(server1_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
+    perror("setsockopt 1");
+    exit(EXIT_FAILURE);
+}
+    if (setsockopt(server2_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
+    perror("setsockopt 2"); 
+    exit(EXIT_FAILURE);
+}
 
     addr1.sin_family = AF_INET;
     addr1.sin_addr.s_addr = INADDR_ANY;
