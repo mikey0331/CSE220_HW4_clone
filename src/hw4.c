@@ -51,30 +51,32 @@ const int TETRIS_PIECES[7][4][2] = {
     {{0,-1}, {0,0}, {1,0}, {1,1}}     // Z
 };
 
-void send_error(int socket, int code) {
-    char response[16];
-    sprintf(response, "E %d", code);
-    write(socket, response, strlen(response));
-    write(socket, "\n", 1);
+void send_error(int socket, int error_code) {
+    char response[BUFFER_SIZE];
+    sprintf(response, "E %d\n", error_code);
+    send(socket, response, strlen(response), 0);
 }
+
 
 void send_ack(int socket) {
-    write(socket, "A\n", 2);
+    send(socket, "A\n", 2, 0);
 }
 
-void send_halt(int socket, int is_winner) {
-    char response[16];
-    sprintf(response, "H %d", is_winner);
-    write(socket, response, strlen(response));
-    write(socket, "\n", 1);
+
+void send_halt(int socket, int win) {
+    char response[BUFFER_SIZE];
+    sprintf(response, "H %d\n", win);
+    send(socket, response, strlen(response), 0);
 }
 
-void send_shot_response(int socket, int ships_remaining, char result) {
-    char response[32];
-    sprintf(response, "R %d %c", ships_remaining, result);
-    write(socket, response, strlen(response));
-    write(socket, "\n", 1);
+
+void send_shot_response(int socket, int ships, char result) {
+    char response[BUFFER_SIZE];
+    sprintf(response, "R %d %c\n", ships, result);
+    send(socket, response, strlen(response), 0);
 }
+
+
 
 void rotate_point(int *row, int *col, int rotation) {
     int temp;
