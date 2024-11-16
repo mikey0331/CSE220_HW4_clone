@@ -155,29 +155,18 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         return;
     }
 
-    // Handle B command
+    // Only send error for invalid B commands in phase 0
     if(packet[0] == 'B' && game->phase == 0) {
         int w = 0, h = 0;
         if(sscanf(packet, "B %d %d", &w, &h) != 2 || w < 10 || h < 10) {
             send_error(current->socket, 200);
             return;
         }
-        if(is_p1) {
-            game->width = w;
-            game->height = h;
-        }
-        send_ack(current->socket);
-        current->ready = 1;
-        if(game->p1.ready && game->p2.ready) {
-            game->phase = 1;
-        }
-        return;
     }
 
-    // All other commands get acknowledgment
+    // Everything else gets an acknowledgment
     send_ack(current->socket);
 }
-
 
 
 
