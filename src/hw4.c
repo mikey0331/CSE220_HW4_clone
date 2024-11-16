@@ -125,12 +125,6 @@ int validate_init(GameState *game, char *packet, Ship *ships) {
         
         token = strtok(NULL, " ");
     }
-    
-    int board[MAX_BOARD][MAX_BOARD] = {0};
-    for(int i = 0; i < MAX_SHIPS; i++) {
-        int result = validate_ship_placement(game, ships[i], board);
-        if(result != 0) return result;
-    }
     return 0;
 }
 
@@ -167,57 +161,35 @@ void process_shot(GameState *game, Player *shooter, Player *target, int row, int
     game->current_turn = (game->current_turn == 1) ? 2 : 1;
 }
 
-void build_query_response(GameState *game, Player *player, Player *opponent, char *response) {
-    sprintf(response, "G %d", opponent->ships_remaining);
-    for(int i = 0; i < game->height; i++) {
-        for(int j = 0; j < game->width; j++) {
-            if(player->shots[i][j]) {
-                char temp[32];
-                sprintf(temp, " %c %d %d", opponent->board[i][j] ? 'H' : 'M', i, j);
-                strcat(response, temp);
-            }
-        }
-    }
-    strcat(response, "\n");
-}
-
 void process_packet(GameState *game, char *packet, int is_p1) {
     Player *current = is_p1 ? &game->p1 : &game->p2;
     Player *other = is_p1 ? &game->p2 : &game->p1;
 
-    // Handle forfeit first
     if(packet[0] == 'F') {
         send_halt(current->socket, 0);
+        send_halt(other->socket, 1);
         game->phase = 3;
         return;
     }
 
-    // Phase checks
-    if(game->phase == 0 && packet[0] != 'B') {
+    if(packet[0] != 'B' && packet[0] != 'I' && packet[0] != 'S' && 
+       packet[0] != 'Q' && packet[0] != 'F') {
         send_error(current->socket, 300);
-        return;
-    }
-    if(game->phase == 1 && packet[0] != 'I') {
-        send_error(current->socket, 101);
-        return;
-    }
-    if(game->phase == 2 && packet[0] != 'S' && packet[0] != 'Q') {
-        send_error(current->socket, 102);
         return;
     }
 
     switch(packet[0]) {
         case 'B': {
             if(game->phase != 0) {
-                send_error(current->socket, 100);
+                send_error(current->socket, 301);
+                return;
+            }
+            int w = 0, h = 0;
+            if(sscanf(packet, "B %d %d", &w, &h) != 2 || w < 10 || h < 10) {
+                send_error(current->socket, 200);
                 return;
             }
             if(is_p1) {
-                int w = 0, h = 0;
-                if(sscanf(packet, "B %d %d", &w, &h) != 2 || w < 10 || h < 10) {
-                    send_error(current->socket, 200);
-                    return;
-                }
                 game->width = w;
                 game->height = h;
             }
@@ -229,10 +201,13 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             break;
         }
         case 'I': {
+            if(game->phase != 1) {
+                send_error(current->socket, 301);
+                return;
+            }
             Ship ships[MAX_SHIPS];
-            int error = validate_init(game, packet, ships);
-            if(error) {
-                send_error(current->socket, error);
+            if(validate_init(game, packet, ships) != 0) {
+                send_error(current->socket, 201);
                 return;
             }
             place_ships(game, current, ships);
@@ -244,27 +219,10 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             break;
         }
         case 'S': {
-            if((is_p1 && game->current_turn != 1) || (!is_p1 && game->current_turn != 2)) {
-                send_error(current->socket, 103);
+            if(game->phase != 2) {
+                send_error(current->socket, 302);
                 return;
             }
-            int row, col;
-            if(sscanf(packet, "S %d %d", &row, &col) != 2) {
-                send_ack(current->socket);
-                return;
-            }
-            if(row < 0 || row >= game->height || col < 0 || col >= game->width) {
-                send_ack(current->socket);
-                return;
-            }
-            if(current->shots[row][col]) {
-                send_ack(current->socket);
-                return;
-            }
-            process_shot(game, current, other, row, col);
-            break;
-        }
-        case 'Q': {
             if((is_p1 && game->current_turn != 1) || (!is_p1 && game->current_turn != 2)) {
                 send_error(current->socket, 103);
                 return;
@@ -272,13 +230,20 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             send_ack(current->socket);
             break;
         }
-        default:
-            send_error(current->socket, 300);
+        case 'Q': {
+            if(game->phase != 2) {
+                send_error(current->socket, 302);
+                return;
+            }
+            if((is_p1 && game->current_turn != 1) || (!is_p1 && game->current_turn != 2)) {
+                send_error(current->socket, 103);
+                return;
+            }
+            send_ack(current->socket);
             break;
+        }
     }
 }
-
-
 
 int main() {
     GameState game = {0};
@@ -346,6 +311,6 @@ int main() {
     close(game.p2.socket);
     close(server1_fd);
     close(server2_fd);
-
+    
     return 0;
 }
