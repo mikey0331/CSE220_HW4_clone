@@ -1,13 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <sys/select.h>
+#include <zmq.h>
+#include <assert.h>
 
-#define PORT1 2201
-#define PORT2 2202
+#define PORT1 "2201"
+#define PORT2 "2202"
 #define BUFFER_SIZE 1024
 #define MAX_SHIPS 5
 #define MAX_BOARD 20
@@ -21,7 +19,7 @@ typedef struct {
 } Ship;
 
 typedef struct {
-    int socket;
+    void *socket;
     int ready;
     Ship ships[MAX_SHIPS];
     int num_ships;
@@ -49,23 +47,22 @@ const int TETRIS_PIECES[7][4][2] = {
     {{0,-1}, {0,0}, {1,0}, {1,1}}     // Z
 };
 
-void send_exact_response(int socket, const char *msg) {
-    write(socket, msg, strlen(msg));
-    write(socket, "\n", 1);
+void send_exact_response(void *socket, const char *msg) {
+    char response[BUFFER_SIZE];
+    sprintf(response, "%s\n", msg);
+    zmq_send(socket, response, strlen(response), 0);
 }
 
-void send_halt(int socket, int is_winner) {
+void send_halt(void *socket, int is_winner) {
     char response[16];
-    sprintf(response, "H %d", is_winner);
-    write(socket, response, strlen(response));
-    write(socket, "\n", 1);
+    sprintf(response, "H %d\n", is_winner);
+    zmq_send(socket, response, strlen(response), 0);
 }
 
-void send_shot_response(int socket, int ships_remaining, char result) {
+void send_shot_response(void *socket, int ships_remaining, char result) {
     char response[32];
-    sprintf(response, "R %d %c", ships_remaining, result);
-    write(socket, response, strlen(response));
-    write(socket, "\n", 1);
+    sprintf(response, "R %d %c\n", ships_remaining, result);
+    zmq_send(socket, response, strlen(response), 0);
 }
 
 void rotate_point(int *row, int *col, int rotation) {
@@ -144,14 +141,11 @@ void place_ships(GameState *game, Player *player, Ship *ships) {
 }
 
 void process_shot(GameState *game, Player *shooter, Player *target, int row, int col) {
-    if (shooter->shots[row][col]) {
-        return;
-    }
     shooter->shots[row][col] = 1;
-    if (target->board[row][col]) {
+    if(target->board[row][col]) {
         target->ships_remaining--;
         send_shot_response(shooter->socket, target->ships_remaining, 'H');
-        if (target->ships_remaining == 0) {
+        if(target->ships_remaining == 0) {
             game->phase = 3;
             return;
         }
@@ -269,90 +263,55 @@ void process_packet(GameState *game, char *packet, int is_p1) {
     }
 }
 
-int setup_socket(int port) {
-    int server_fd;
-    struct sockaddr_in address;
-    int opt = 1;
-
-    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
-        perror("socket failed");
-        exit(EXIT_FAILURE);
-    }
-
-    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
-        perror("setsockopt");
-        exit(EXIT_FAILURE);
-    }
-
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port = htons(port);
-
-    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
-        perror("bind failed");
-        exit(EXIT_FAILURE);
-    }
-
-    if (listen(server_fd, 1) < 0) {
-        perror("listen");
-        exit(EXIT_FAILURE);
-    }
-
-    return server_fd;
-}
-
-void handle_player_input(GameState *game, int is_p1) {
-    char buffer[BUFFER_SIZE] = {0};
-    Player *current = is_p1 ? &game->p1 : &game->p2;
-    
-    ssize_t bytes = read(current->socket, buffer, BUFFER_SIZE-1);
-    if (bytes <= 0) return;
-    
-    buffer[bytes] = '\0';
-    buffer[strcspn(buffer, "\n")] = '\0';
-    
-    process_packet(game, buffer, is_p1);
-}
-
 int main() {
+    void *context = zmq_ctx_new();
+    void *p1_socket = zmq_socket(context, ZMQ_REP);
+    void *p2_socket = zmq_socket(context, ZMQ_REP);
+
+    char p1_endpoint[32], p2_endpoint[32];
+    sprintf(p1_endpoint, "tcp://*:%s", PORT1);
+    sprintf(p2_endpoint, "tcp://*:%s", PORT2);
+
+    zmq_bind(p1_socket, p1_endpoint);
+    zmq_bind(p2_socket, p2_endpoint);
+
     GameState game = {0};
     game.phase = 0;
     game.current_turn = 1;
+    game.p1.socket = p1_socket;
+    game.p2.socket = p2_socket;
 
-    int server1_fd = setup_socket(PORT1);
-    int server2_fd = setup_socket(PORT2);
-    
-    printf("Waiting for P1 connection on port %d\n", PORT1);
-    game.p1.socket = accept(server1_fd, NULL, NULL);
-    
-    printf("Waiting for P2 connection on port %d\n", PORT2);
-    game.p2.socket = accept(server2_fd, NULL, NULL);
+    printf("Server started on ports %s and %s\n", PORT1, PORT2);
+
+    char buffer[BUFFER_SIZE];
+    zmq_pollitem_t items[] = {
+        { p1_socket, 0, ZMQ_POLLIN, 0 },
+        { p2_socket, 0, ZMQ_POLLIN, 0 }
+    };
 
     while(1) {
-        fd_set readfds;
-        FD_ZERO(&readfds);
-        FD_SET(game.p1.socket, &readfds);
-        FD_SET(game.p2.socket, &readfds);
-        
-        int maxfd = (game.p1.socket > game.p2.socket) ? game.p1.socket : game.p2.socket;
-        select(maxfd + 1, &readfds, NULL, NULL, NULL);
+        zmq_poll(items, 2, -1);
 
-        if (FD_ISSET(game.p1.socket, &readfds)) {
-            handle_player_input(&game, 1);
-        }
-        if (FD_ISSET(game.p2.socket, &readfds)) {
-            handle_player_input(&game, 0);
+        if(items[0].revents & ZMQ_POLLIN) {
+            int size = zmq_recv(p1_socket, buffer, BUFFER_SIZE-1, 0);
+            buffer[size] = '\0';
+            buffer[strcspn(buffer, "\n")] = '\0';
+            process_packet(&game, buffer, 1);
         }
 
-        if (game.phase == 3) {
-            break;
+        if(items[1].revents & ZMQ_POLLIN) {
+            int size = zmq_recv(p2_socket, buffer, BUFFER_SIZE-1, 0);
+            buffer[size] = '\0';
+            buffer[strcspn(buffer, "\n")] = '\0';
+            process_packet(&game, buffer, 0);
         }
+
+        if(game.phase == 3) break;
     }
 
-    close(game.p1.socket);
-    close(game.p2.socket);
-    close(server1_fd);
-    close(server2_fd);
+    zmq_close(p1_socket);
+    zmq_close(p2_socket);
+    zmq_ctx_destroy(context);
 
     return 0;
 }
