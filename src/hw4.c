@@ -50,10 +50,8 @@ const int TETRIS_PIECES[7][4][2] = {
 };
 
 void send_exact_response(int socket, const char *msg) {
-    char response[BUFFER_SIZE];
-    strcpy(response, msg);
-    strcat(response, "\n");
-    send(socket, response, strlen(response), 0);
+    write(socket, msg, strlen(msg));
+    write(socket, "\n", 1);
 }
 
 void send_halt(int socket, int is_winner) {
