@@ -55,15 +55,15 @@ void send_exact_response(int socket, const char *msg) {
     write(socket, response, strlen(response));
 }
 
-void send_shot_response(int socket, int ships_remaining, char result) {
-    char response[BUFFER_SIZE];
-    sprintf(response, "R %d %c\n", ships_remaining, result);
-    write(socket, response, strlen(response));
-}
-
 void send_halt(int socket, int is_winner) {
     char response[BUFFER_SIZE];
     sprintf(response, "H %d\n", is_winner);
+    write(socket, response, strlen(response));
+}
+
+void send_shot_response(int socket, int ships_remaining, char result) {
+    char response[BUFFER_SIZE];
+    sprintf(response, "R %d %c\n", ships_remaining, result);
     write(socket, response, strlen(response));
 }
 
@@ -143,14 +143,13 @@ void place_ships(GameState *game, Player *player, Ship *ships) {
 }
 
 void process_shot(GameState *game, Player *shooter, Player *target, int row, int col) {
-    if (shooter->shots[row][col]) {
-        return;
-    }
     shooter->shots[row][col] = 1;
-    if (target->board[row][col]) {
+    if(target->board[row][col]) {
         target->ships_remaining--;
         send_shot_response(shooter->socket, target->ships_remaining, 'H');
-        if (target->ships_remaining == 0) {
+        if(target->ships_remaining == 0) {
+            send_halt(target->socket, 0);
+            send_halt(shooter->socket, 1);
             game->phase = 3;
             return;
         }
@@ -179,65 +178,62 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
     if(packet[0] == 'F') {
         send_halt(current->socket, 0);
+        send_halt(other->socket, 1);
         game->phase = 3;
         return;
     }
 
-    if(game->phase == 0 && packet[0] != 'B') {
-        send_exact_response(current->socket, "E 100");
-        return;
-    }
-    if(game->phase == 1 && packet[0] != 'I') {
-        send_exact_response(current->socket, "E 101");
-        return;
-    }
-    if(game->phase == 2 && packet[0] != 'S' && packet[0] != 'Q') {
-        send_exact_response(current->socket, "E 102");
-        return;
-    }
-
-    switch(packet[0]) {
-        case 'B': {
-            if(is_p1) {
-                int w, h;
-                if(sscanf(packet, "B %d %d", &w, &h) != 2 || w < 10 || h < 10) {
-                    send_exact_response(current->socket, "E 200");
-                    return;
-                }
-                game->width = w;
-                game->height = h;
-            }
-            send_exact_response(current->socket, "A");
-            current->ready = 1;
-            if(game->p1.ready && game->p2.ready) {
-                game->phase = 1;
-            }
-            break;
+    if(game->phase == 0) {
+        if(packet[0] != 'B') {
+            send_exact_response(current->socket, "E 100");
+            return;
         }
-
-        case 'I': {
-            Ship ships[MAX_SHIPS];
-            int error = validate_init(game, packet, ships);
-            if(error) {
-                char error_msg[16];
-                sprintf(error_msg, "E %d", error);
-                send_exact_response(current->socket, error_msg);
+        if(is_p1) {
+            int w, h;
+            if(sscanf(packet, "B %d %d", &w, &h) != 2 || w < 10 || h < 10) {
+                send_exact_response(current->socket, "E 200");
                 return;
             }
-            place_ships(game, current, ships);
-            send_exact_response(current->socket, "A");
-            current->ready = 2;
-            if(game->p1.ready == 2 && game->p2.ready == 2) {
-                game->phase = 2;
-            }
-            break;
+            game->width = w;
+            game->height = h;
+        }
+        send_exact_response(current->socket, "A");
+        current->ready = 1;
+        if(game->p1.ready && game->p2.ready) {
+            game->phase = 1;
+        }
+        return;
+    }
+
+    if(game->phase == 1) {
+        if(packet[0] != 'I') {
+            send_exact_response(current->socket, "E 101");
+            return;
+        }
+        Ship ships[MAX_SHIPS];
+        int error = validate_init(game, packet, ships);
+        if(error) {
+            char error_msg[16];
+            sprintf(error_msg, "E %d", error);
+            send_exact_response(current->socket, error_msg);
+            return;
+        }
+        place_ships(game, current, ships);
+        send_exact_response(current->socket, "A");
+        current->ready = 2;
+        if(game->p1.ready == 2 && game->p2.ready == 2) {
+            game->phase = 2;
+        }
+        return;
+    }
+
+    if(game->phase == 2) {
+        if((is_p1 && game->current_turn != 1) || (!is_p1 && game->current_turn != 2)) {
+            send_exact_response(current->socket, "E 103");
+            return;
         }
 
-        case 'S': {
-            if((is_p1 && game->current_turn != 1) || (!is_p1 && game->current_turn != 2)) {
-                send_exact_response(current->socket, "E 103");
-                return;
-            }
+        if(packet[0] == 'S') {
             int row, col;
             if(sscanf(packet, "S %d %d", &row, &col) != 2) {
                 send_exact_response(current->socket, "E 202");
@@ -252,18 +248,10 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 return;
             }
             process_shot(game, current, other, row, col);
-            break;
-        }
-
-        case 'Q': {
-            if((is_p1 && game->current_turn != 1) || (!is_p1 && game->current_turn != 2)) {
-                send_exact_response(current->socket, "E 103");
-                return;
-            }
+        } else if(packet[0] == 'Q') {
             char response[BUFFER_SIZE];
             build_query_response(game, current, other, response);
             send_exact_response(current->socket, response);
-            break;
         }
     }
 }
@@ -273,44 +261,17 @@ int setup_socket(int port) {
     struct sockaddr_in address;
     int opt = 1;
 
-    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
-        perror("socket failed");
-        exit(EXIT_FAILURE);
-    }
-
-    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
-        perror("setsockopt");
-        exit(EXIT_FAILURE);
-    }
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = INADDR_ANY;
     address.sin_port = htons(port);
 
-    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
-        perror("bind failed");
-        exit(EXIT_FAILURE);
-    }
-
-    if (listen(server_fd, 1) < 0) {
-        perror("listen");
-        exit(EXIT_FAILURE);
-    }
+    bind(server_fd, (struct sockaddr *)&address, sizeof(address));
+    listen(server_fd, 1);
 
     return server_fd;
-}
-
-void handle_player_input(GameState *game, int is_p1) {
-    char buffer[BUFFER_SIZE] = {0};
-    Player *current = is_p1 ? &game->p1 : &game->p2;
-    
-    ssize_t bytes = read(current->socket, buffer, BUFFER_SIZE-1);
-    if (bytes <= 0) return;
-    
-    buffer[bytes] = '\0';
-    buffer[strcspn(buffer, "\n")] = '\0';
-    
-    process_packet(game, buffer, is_p1);
 }
 
 int main() {
