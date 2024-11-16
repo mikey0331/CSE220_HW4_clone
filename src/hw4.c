@@ -143,123 +143,98 @@ void place_ships(GameState *game, Player *player, Ship *ships) {
     player->ships_remaining = MAX_SHIPS * 4;
 }
 
-void process_shot(GameState *game, Player *shooter, Player *target, int row, int col) {
-    if (shooter->shots[row][col]) {
-        return;
-    }
-    shooter->shots[row][col] = 1;
-    if (target->board[row][col]) {
-        target->ships_remaining--;
-        send_shot_response(shooter->socket, target->ships_remaining, 'H');
-        if (target->ships_remaining == 0) {
-            game->phase = 3;
-            return;
-        }
-    } else {
-        send_shot_response(shooter->socket, target->ships_remaining, 'M');
-    }
-    game->current_turn = (game->current_turn == 1) ? 2 : 1;
-}
-
-void build_query_response(GameState *game, Player *player, Player *opponent, char *response) {
-    sprintf(response, "G %d", opponent->ships_remaining);
-    for(int i = 0; i < game->height; i++) {
-        for(int j = 0; j < game->width; j++) {
-            if(player->shots[i][j]) {
-                char temp[32];
-                sprintf(temp, " %c %d %d", opponent->board[i][j] ? 'H' : 'M', i, j);
-                strcat(response, temp);
-            }
-        }
-    }
-}
-
 void process_packet(GameState *game, char *packet, int is_p1) {
-    Player *current = is_p1 ? &game->p1 : &game->p2;
+Player *current = is_p1 ? &game->p1 : &game->p2;
 
-    // Only handle forfeit for current player
-    if(packet[0] == 'F') {
-        send_halt(current->socket, 0);
-        game->phase = 3;
-        return;
-    }
 
-    // Phase validation - only respond to current player
-    if(game->phase == 0 && packet[0] != 'B') {
-        send_exact_response(current->socket, "E 100");
-        return;
-    }
+// Only handle forfeit for current player
+if(packet[0] == 'F') {
+send_halt(current->socket, 0);
+game->phase = 3;
+return;
+}
 
-    switch(packet[0]) {
-        case 'B': {
-            if(is_p1) {
-                int w, h;
-                if(sscanf(packet, "B %d %d", &w, &h) != 2 || w < 10 || h < 10) {
-                    send_exact_response(current->socket, "E 200");
-                    return;
-                }
-                game->width = w;
-                game->height = h;
-            }
-            send_exact_response(current->socket, "A");
-            current->ready = 1;
-            if(game->p1.ready && game->p2.ready) {
-                game->phase = 1;
-            }
-            break;
-        }
 
-        case 'I': {
-            if(game->phase != 1) {
-                send_exact_response(current->socket, "E 101");
-                return;
-            }
-            Ship ships[MAX_SHIPS];
-            int error = validate_init(game, packet, ships);
-            if(error) {
-                char error_msg[16];
-                sprintf(error_msg, "E %d", error);
-                send_exact_response(current->socket, error_msg);
-                return;
-            }
-            place_ships(game, current, ships);
-            send_exact_response(current->socket, "A");
-            current->ready = 2;
-            if(game->p1.ready == 2 && game->p2.ready == 2) {
-                game->phase = 2;
-            }
-            break;
-        }
+// Phase validation - only respond to current player
+if(game->phase == 0 && packet[0] != 'B') {
+send_exact_response(current->socket, "E 100");
+return;
+}
 
-        case 'S': {
-            if(game->phase != 2) {
-                send_exact_response(current->socket, "E 102");
-                return;
-            }
-            if((is_p1 && game->current_turn != 1) || (!is_p1 && game->current_turn != 2)) {
-                send_exact_response(current->socket, "E 103");
-                return;
-            }
-            // Process shot only for current player's turn
-            process_shot(game, current, is_p1 ? &game->p2 : &game->p1);
-            break;
-        }
 
-        case 'Q': {
-            if(game->phase != 2) {
-                send_exact_response(current->socket, "E 102");
-                return;
-            }
-            if((is_p1 && game->current_turn != 1) || (!is_p1 && game->current_turn != 2)) {
-                send_exact_response(current->socket, "E 103");
-                return;
-            }
-            char response[BUFFER_SIZE];
-            build_query_response(game, current, is_p1 ? &game->p2 : &game->p1, response);
-            send_exact_response(current->socket, response);
-            break;
-        }
-    }
+switch(packet[0]) {
+case 'B': {
+if(is_p1) {
+int w, h;
+if(sscanf(packet, "B %d %d", &w, &h) != 2 || w < 10 || h < 10) {
+send_exact_response(current->socket, "E 200");
+return;
+}
+game->width = w;
+game->height = h;
+}
+send_exact_response(current->socket, "A");
+current->ready = 1;
+if(game->p1.ready && game->p2.ready) {
+game->phase = 1;
+}
+break;
+}
+
+
+case 'I': {
+if(game->phase != 1) {
+send_exact_response(current->socket, "E 101");
+return;
+}
+Ship ships[MAX_SHIPS];
+int error = validate_init(game, packet, ships);
+if(error) {
+char error_msg[16];
+sprintf(error_msg, "E %d", error);
+send_exact_response(current->socket, error_msg);
+return;
+}
+place_ships(game, current, ships);
+send_exact_response(current->socket, "A");
+current->ready = 2;
+if(game->p1.ready == 2 && game->p2.ready == 2) {
+game->phase = 2;
+}
+break;
+}
+
+
+case 'S': {
+if(game->phase != 2) {
+send_exact_response(current->socket, "E 102");
+return;
+}
+if((is_p1 && game->current_turn != 1) || (!is_p1 && game->current_turn != 2)) {
+send_exact_response(current->socket, "E 103");
+return;
+}
+// Process shot only for current player's turn
+process_shot(game, current, is_p1 ? &game->p2 : &game->p1);
+break;
+}
+
+
+case 'Q': {
+if(game->phase != 2) {
+send_exact_response(current->socket, "E 102");
+return;
+}
+if((is_p1 && game->current_turn != 1) || (!is_p1 && game->current_turn != 2)) {
+send_exact_response(current->socket, "E 103");
+return;
+}
+char response[BUFFER_SIZE];
+build_query_response(game, current, is_p1 ? &game->p2 : &game->p1, response);
+send_exact_response(current->socket, response);
+break;
+}
+}
 }
 
 
