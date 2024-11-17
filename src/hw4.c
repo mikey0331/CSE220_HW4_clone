@@ -15,18 +15,8 @@
 #define MAX_BOARD 20
 
 typedef struct {
-    int type;
-    int rotation;
-    int row;
-    int col;
-    int hits;
-} Ship;
-
-typedef struct {
     int socket;
     int ready;
-    Ship ships[MAX_SHIPS];
-    int num_ships;
     int board[MAX_BOARD][MAX_BOARD];
     int shots[MAX_BOARD][MAX_BOARD];
     int ships_remaining;
@@ -53,7 +43,7 @@ const int TETRIS_PIECES[7][4][2] = {
 
 void send_error(int socket, int code) {
     char response[16];
-    sprintf(response, "E %d", code);
+    sprintf(response, "E%d", code);
     write(socket, response, strlen(response));
 }
 
@@ -63,7 +53,7 @@ void send_ack(int socket) {
 
 void send_halt(int socket, int is_winner) {
     char response[16];
-    sprintf(response, "H %d", is_winner);
+    sprintf(response, "H%d", is_winner);
     write(socket, response, strlen(response));
 }
 
@@ -235,13 +225,21 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             other->ships_remaining--;
             send_shot_response(current->socket, other->ships_remaining, 'H');
             if(other->ships_remaining == 0) {
-                send_halt(other->socket, 0);
-                send_halt(current->socket, 1);
-                game->phase = 3;
+                game->phase = 4;
             }
         } else {
             send_shot_response(current->socket, other->ships_remaining, 'M');
         }
+        return;
+    }
+
+    if(game->phase == 4) {
+        if(!is_p1) {
+            send_halt(current->socket, 0);
+            send_halt(other->socket, 1);
+            game->phase = 3;
+        }
+        return;
     }
 }
 
