@@ -82,7 +82,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
         if(is_p1) {
             int w = 0, h = 0;
-            char *token = strtok(packet + 1, " ");
+            char *token = strtok(packet + 2, " ");
             if(!token || !(w = atoi(token))) {
                 send_error(current->socket, 200);
                 return;
@@ -211,7 +211,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         }
 
         int row = -1, col = -1;
-        char *token = strtok(packet + 1, " ");
+        char *token = strtok(packet + 2, " ");
         if(!token || (row = atoi(token)) < 0) {
             send_error(current->socket, 202);
             return;
