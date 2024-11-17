@@ -15,8 +15,18 @@
 #define MAX_BOARD 20
 
 typedef struct {
+    int type;
+    int rotation;
+    int row;
+    int col;
+    int hits;
+} Ship;
+
+typedef struct {
     int socket;
     int ready;
+    Ship ships[MAX_SHIPS];
+    int num_ships;
     int board[MAX_BOARD][MAX_BOARD];
     int shots[MAX_BOARD][MAX_BOARD];
     int ships_remaining;
@@ -32,35 +42,60 @@ typedef struct {
 } GameState;
 
 const int TETRIS_PIECES[7][4][2] = {
-    {{0,0}, {0,1}, {0,2}, {0,3}},     // I
-    {{0,0}, {0,1}, {1,0}, {1,1}},     // O
-    {{0,1}, {1,0}, {1,1}, {1,2}},     // T
-    {{0,0}, {1,0}, {2,0}, {2,1}},     // J
-    {{0,0}, {1,0}, {2,0}, {2,-1}},    // L
-    {{0,0}, {0,1}, {1,-1}, {1,0}},    // S
-    {{0,-1}, {0,0}, {1,0}, {1,1}}     // Z
+    {{0, 0}, {0, 1}, {0, 2}, {0, 3}}, // I
+    {{0, 0}, {0, 1}, {1, 0}, {1, 1}}, // O
+    {{0, 1}, {1, 0}, {1, 1}, {1, 2}}, // T
+    {{0, 0}, {1, 0}, {2, 0}, {2, 1}}, // J
+    {{0, 0}, {1, 0}, {2, 0}, {2, -1}}, // L
+    {{0, 0}, {0, 1}, {1, -1}, {1, 0}}, // S
+    {{0, -1}, {0, 0}, {1, 0}, {1, 1}} // Z
 };
 
 void send_error(int socket, int code) {
     char response[16];
-    sprintf(response, "E %d", code);
+    sprintf(response, "E %d", code); // Added a space after "E"
     write(socket, response, strlen(response));
 }
 
 void send_ack(int socket) {
-    write(socket, "A", 1);
+    char response[4] = "A "; // Added a space after "A"
+    write(socket, response, strlen(response));
 }
 
 void send_halt(int socket, int is_winner) {
     char response[16];
-    sprintf(response, "H %d", is_winner);
+    sprintf(response, "H %d", is_winner); // Added a space after "H"
     write(socket, response, strlen(response));
 }
 
 void send_shot_response(int socket, int ships_remaining, char result) {
     char response[32];
-    sprintf(response, "R %d %c", ships_remaining, result);
+    sprintf(response, "R %d %c", ships_remaining, result); // Added spaces between components
     write(socket, response, strlen(response));
+}
+
+// Build query response for consistency
+void build_query_response(GameState *game, Player *player, Player *opponent, char *response) {
+    sprintf(response, "G %d", opponent->ships_remaining); // Added space after "G"
+    for (int i = 0; i < game->height; i++) {
+        for (int j = 0; j < game->width; j++) {
+            if (player->shots[i][j]) {
+                char temp[32];
+                sprintf(temp, " %c %d %d", opponent->board[i][j] ? 'H' : 'M', i, j); // Spaces between elements
+                strcat(response, temp);
+            }
+        }
+    }
+}
+
+// Updated helper function: rotate_point (unchanged logic)
+void rotate_point(int *row, int *col, int rotation) {
+    int temp;
+    for (int i = 0; i < rotation; i++) {
+        temp = *row;
+        *row = -*col;
+        *col = temp;
+    }
 }
 
 void process_packet(GameState *game, char *packet, int is_p1) {
