@@ -269,7 +269,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 for(int j = 0; j < game->width; j++) {
                     if(current->shots[i][j]) {
                         char hit = other->board[i][j] ? 'H' : 'M';
-                        sprintf(response + strlen(response), " %c %d %d", hit, j, i);
+                        sprintf(response + strlen(response), " %c %d %d", hit, i, j);
                     }
                 }
             }
