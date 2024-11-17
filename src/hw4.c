@@ -81,7 +81,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
     if(game->phase == 0) {
         if(packet[0] != 'B') {
-            send_error(current->socket, 200);
+            send_error(current->socket, is_p1 ? 200 : 100);
             return;
         }
 
@@ -95,7 +95,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             game->height = h;
         } else {
             if(strlen(packet) > 1) {
-                send_error(current->socket, 200);
+                send_error(current->socket, 100);
                 return;
             }
         }
@@ -110,7 +110,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
     if(game->phase == 1) {
         if(packet[0] != 'I') {
-            send_error(current->socket, 300);
+            send_error(current->socket, 101);
             return;
         }
 
@@ -124,7 +124,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         free(temp_packet);
 
         if(param_count != MAX_SHIPS * 4) {
-            send_error(current->socket, 300);
+            send_error(current->socket, 301);
             return;
         }
 
@@ -134,14 +134,14 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         for(int i = 0; i < MAX_SHIPS; i++) {
             int type = atoi(token);
             if(type < 1 || type > 7) {
-                send_error(current->socket, 300);
+                send_error(current->socket, 301);
                 return;
             }
             
             token = strtok(NULL, " ");
             int rotation = atoi(token);
             if(rotation < 0 || rotation > 3) {
-                send_error(current->socket, 300);
+                send_error(current->socket, 302);
                 return;
             }
             
@@ -166,11 +166,11 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 
                 if(new_row < 0 || new_row >= game->height || 
                    new_col < 0 || new_col >= game->width) {
-                    send_error(current->socket, 300);
+                    send_error(current->socket, 301);
                     return;
                 }
                 if(temp_board[new_row][new_col]) {
-                    send_error(current->socket, 300);
+                    send_error(current->socket, 302);
                     return;
                 }
                 temp_board[new_row][new_col] = 1;
