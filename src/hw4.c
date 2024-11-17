@@ -1,4 +1,3 @@
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -82,8 +81,14 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         }
 
         if(is_p1) {
-            int w, h;
-            if(sscanf(packet, "B %d %d", &w, &h) != 2 || w < 10 || h < 10) {
+            int w = 0, h = 0;
+            char *token = strtok(packet + 1, " ");
+            if(!token || !(w = atoi(token))) {
+                send_error(current->socket, 200);
+                return;
+            }
+            token = strtok(NULL, " ");
+            if(!token || !(h = atoi(token)) || w < 10 || h < 10) {
                 send_error(current->socket, 200);
                 return;
             }
@@ -111,9 +116,9 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         }
 
         char *temp_packet = strdup(packet);
-        char *token = strtok(temp_packet, " ");
-        int param_count = -1;
-        while(token != NULL) {
+        char *token = strtok(temp_packet + 1, " ");
+        int param_count = 0;
+        while(token) {
             param_count++;
             token = strtok(NULL, " ");
         }
@@ -124,7 +129,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             return;
         }
 
-        token = strtok(packet + 2, " ");
+        token = strtok(packet + 1, " ");
         int temp_board[MAX_BOARD][MAX_BOARD] = {0};
         
         for(int i = 0; i < MAX_SHIPS; i++) {
@@ -205,13 +210,19 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             return;
         }
 
-        int row, col;
-        if(sscanf(packet + 2, "%d %d", &row, &col) != 2) {
+        int row = -1, col = -1;
+        char *token = strtok(packet + 1, " ");
+        if(!token || (row = atoi(token)) < 0) {
+            send_error(current->socket, 202);
+            return;
+        }
+        token = strtok(NULL, " ");
+        if(!token || (col = atoi(token)) < 0) {
             send_error(current->socket, 202);
             return;
         }
         
-        if(row < 0 || row >= game->height || col < 0 || col >= game->width) {
+        if(row >= game->height || col >= game->width) {
             send_error(current->socket, 400);
             return;
         }
