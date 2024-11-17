@@ -58,7 +58,7 @@ void send_error(int socket, int code) {
 }
 
 void send_ack(int socket) {
-    char response[4] = "A "; // Added a space after "A"
+    char response[4] = "A"; // Added a space after "A"
     write(socket, response, strlen(response));
 }
 
