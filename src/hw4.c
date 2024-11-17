@@ -58,8 +58,7 @@ void send_error(int socket, int code) {
 }
 
 void send_ack(int socket) {
-    char response[4] = "A"; // Added a space after "A"
-    write(socket, response, strlen(response));
+     write(socket, "A", 1);
 }
 
 void send_halt(int socket, int is_winner) {
