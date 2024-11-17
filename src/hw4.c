@@ -116,7 +116,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         }
 
         char *temp_packet = strdup(packet);
-        char *token = strtok(temp_packet + 1, " ");
+        char *token = strtok(temp_packet + 2, " ");
         int param_count = 0;
         while(token) {
             param_count++;
