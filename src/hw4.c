@@ -43,7 +43,7 @@ const int TETRIS_PIECES[7][4][2] = {
 
 void send_error(int socket, int code) {
     char response[16];
-    sprintf(response, "E %d", code);
+    sprintf(response, "E%d", code);
     write(socket, response, strlen(response));
 }
 
@@ -53,7 +53,7 @@ void send_ack(int socket) {
 
 void send_halt(int socket, int is_winner) {
     char response[16];
-    sprintf(response, "H %d", is_winner);
+    sprintf(response, "H%d", is_winner);
     write(socket, response, strlen(response));
 }
 
@@ -61,6 +61,19 @@ void send_shot_response(int socket, int ships_remaining, char result) {
     char response[32];
     sprintf(response, "R %d %c", ships_remaining, result);
     write(socket, response, strlen(response));
+}
+
+int get_error_code(int phase, int error_type) {
+    switch(phase) {
+        case 0:
+            return error_type == 1 ? 100 : 200;
+        case 1:
+            return error_type == 1 ? 101 : (error_type == 2 ? 201 : 300 + error_type - 3);
+        case 2:
+            return error_type == 1 ? 102 : (error_type == 2 ? 202 : 400 + error_type - 3);
+        default:
+            return 100;
+    }
 }
 
 void process_packet(GameState *game, char *packet, int is_p1) {
@@ -82,13 +95,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
         if(is_p1) {
             int w = 0, h = 0;
-            char *token = strtok(packet + 1, " \t");
-            if(!token || !(w = atoi(token))) {
-                send_error(current->socket, 200);
-                return;
-            }
-            token = strtok(NULL, " ");
-            if(!token || !(h = atoi(token)) || w < 10 || h < 10) {
+            if(sscanf(packet + 1, "%d %d", &w, &h) != 2 || w < 10 || h < 10) {
                 send_error(current->socket, 200);
                 return;
             }
@@ -116,7 +123,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         }
 
         char *temp_packet = strdup(packet);
-        char *token = strtok(temp_packet + 2, " ");
+        char *token = strtok(temp_packet + 1, " ");
         int param_count = 0;
         while(token) {
             param_count++;
@@ -210,19 +217,13 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             return;
         }
 
-        int row = -1, col = -1;
-        char *token = strtok(packet + 1, " \t");
-        if(!token || (row = atoi(token)) < 0) {
-            send_error(current->socket, 202);
-            return;
-        }
-        token = strtok(NULL, " ");
-        if(!token || (col = atoi(token)) < 0) {
+        int row, col;
+        if(sscanf(packet + 1, "%d %d", &row, &col) != 2) {
             send_error(current->socket, 202);
             return;
         }
         
-        if(row >= game->height || col >= game->width) {
+        if(row < 0 || row >= game->height || col < 0 || col >= game->width) {
             send_error(current->socket, 400);
             return;
         }
