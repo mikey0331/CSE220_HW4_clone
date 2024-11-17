@@ -79,6 +79,60 @@ void send_query_response(int socket, Player *player, int ships_remaining, int wi
     write(socket, response, strlen(response));
 }
 
+int validate_init(GameState *game, char *packet, Ship *ships) {
+    // Count parameters first
+    char *token = strtok(packet + 2, " ");
+    int param_count = 0;
+    while(token != NULL) {
+        param_count++;
+        token = strtok(NULL, " ");
+    }
+    if(param_count != MAX_SHIPS * 4) {
+        return 201;
+    }
+
+    // Reset for actual parsing
+    token = strtok(packet + 2, " ");
+    int temp_board[MAX_BOARD][MAX_BOARD] = {0};
+    
+    for(int i = 0; i < MAX_SHIPS; i++) {
+        // Parse ship parameters
+        ships[i].type = atoi(token);
+        if(ships[i].type < 1 || ships[i].type > 7) return 300;
+        
+        token = strtok(NULL, " ");
+        ships[i].rotation = atoi(token);
+        if(ships[i].rotation < 0 || ships[i].rotation > 3) return 301;
+        
+        token = strtok(NULL, " ");
+        ships[i].row = atoi(token);
+        
+        token = strtok(NULL, " ");
+        ships[i].col = atoi(token);
+
+        // Check boundaries and overlaps
+        int piece_idx = ships[i].type - 1;
+        for(int j = 0; j < 4; j++) {
+            int row = TETRIS_PIECES[piece_idx][j][0];
+            int col = TETRIS_PIECES[piece_idx][j][1];
+            rotate_point(&row, &col, ships[i].rotation);
+            row += ships[i].row;
+            col += ships[i].col;
+            
+            if(row < 0 || row >= game->height || col < 0 || col >= game->width) {
+                return 302;
+            }
+            if(temp_board[row][col]) {
+                return 303;
+            }
+            temp_board[row][col] = 1;
+        }
+        token = strtok(NULL, " ");
+    }
+    return 0;
+}
+
+
 void process_packet(GameState *game, char *packet, int is_p1) {
     Player *current = is_p1 ? &game->p1 : &game->p2;
     Player *other = is_p1 ? &game->p2 : &game->p1;
