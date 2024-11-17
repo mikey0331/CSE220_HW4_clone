@@ -102,6 +102,20 @@ void process_packet(GameState *game, char *packet, int is_p1) {
     Player *current = is_p1 ? &game->p1 : &game->p2;
     Player *other = is_p1 ? &game->p2 : &game->p1;
 
+    // First check packet type based on game phase
+    if(game->phase == 0 && packet[0] != 'B') {
+        send_error(current->socket, 100);
+        return;
+    }
+    if(game->phase == 1 && packet[0] != 'I') {
+        send_error(current->socket, 101);
+        return;
+    }
+    if(game->phase == 2 && packet[0] != 'S' && packet[0] != 'Q' && packet[0] != 'F') {
+        send_error(current->socket, 102);
+        return;
+    }
+
     // Handle Forfeit
     if(packet[0] == 'F') {
         send_halt(current->socket, 0);
@@ -110,13 +124,8 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         return;
     }
 
-    // Phase 0: Begin phase
+    // Begin phase validation
     if(game->phase == 0) {
-        if(packet[0] != 'B') {
-            send_error(current->socket, 100);
-            return;
-        }
-
         if(is_p1) {
             int w, h;
             if(sscanf(packet, "B %d %d", &w, &h) != 2 || w < 10 || h < 10) {
@@ -131,61 +140,55 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 return;
             }
         }
-        
         send_ack(current->socket);
         current->ready = 1;
-        if(game->p1.ready && game->p2.ready) {
-            game->phase = 1;
-        }
+        if(game->p1.ready && game->p2.ready) game->phase = 1;
         return;
     }
 
-    // Phase 1: Initialize phase
+    // Initialize phase validation
     if(game->phase == 1) {
-        if(packet[0] != 'I') {
-            send_error(current->socket, 101);
-            return;
-        }
-
-        char *token = strtok(strdup(packet), " ");
-        int param_count = -1;
-        while(token != NULL) {
-            param_count++;
+        int params[MAX_SHIPS * 4];
+        int param_count = 0;
+        char *token = strtok(packet + 2, " ");
+        
+        while(token != NULL && param_count < MAX_SHIPS * 4) {
+            params[param_count++] = atoi(token);
             token = strtok(NULL, " ");
         }
-        free(token);
 
         if(param_count != MAX_SHIPS * 4) {
             send_error(current->socket, 201);
             return;
         }
 
-        token = strtok(packet + 2, " ");
+        // Check all ship types first
         for(int i = 0; i < MAX_SHIPS; i++) {
-            // Check type first
-            int type = atoi(token);
-            if(type < 1 || type > 7) {
+            if(params[i * 4] < 1 || params[i * 4] > 7) {
                 send_error(current->socket, 300);
                 return;
             }
-            
-            token = strtok(NULL, " ");
-            int rotation = atoi(token);
-            if(rotation < 0 || rotation > 3) {
+        }
+
+        // Then check all rotations
+        for(int i = 0; i < MAX_SHIPS; i++) {
+            if(params[i * 4 + 1] < 0 || params[i * 4 + 1] > 3) {
                 send_error(current->socket, 301);
                 return;
             }
-            
-            token = strtok(NULL, " ");
-            int row = atoi(token);
-            token = strtok(NULL, " ");
-            int col = atoi(token);
+        }
 
-            // Check boundaries
-            int piece_idx = type - 1;
+        // Then check boundaries and overlaps
+        int temp_board[MAX_BOARD][MAX_BOARD] = {0};
+        for(int i = 0; i < MAX_SHIPS; i++) {
+            int type = params[i * 4];
+            int rotation = params[i * 4 + 1];
+            int row = params[i * 4 + 2];
+            int col = params[i * 4 + 3];
+
             for(int j = 0; j < 4; j++) {
-                int new_row = TETRIS_PIECES[piece_idx][j][0];
-                int new_col = TETRIS_PIECES[piece_idx][j][1];
+                int new_row = TETRIS_PIECES[type-1][j][0];
+                int new_col = TETRIS_PIECES[type-1][j][1];
                 
                 for(int r = 0; r < rotation; r++) {
                     int temp = new_row;
@@ -201,31 +204,24 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                     send_error(current->socket, 302);
                     return;
                 }
-                if(current->board[new_row][new_col]) {
+                if(temp_board[new_row][new_col]) {
                     send_error(current->socket, 303);
                     return;
                 }
-                current->board[new_row][new_col] = 1;
+                temp_board[new_row][new_col] = 1;
             }
-            token = strtok(NULL, " ");
         }
 
+        memcpy(current->board, temp_board, sizeof(temp_board));
         current->ships_remaining = MAX_SHIPS * 4;
         send_ack(current->socket);
         current->ready = 2;
-        if(game->p1.ready == 2 && game->p2.ready == 2) {
-            game->phase = 2;
-        }
+        if(game->p1.ready == 2 && game->p2.ready == 2) game->phase = 2;
         return;
     }
 
-    // Phase 2: Game play phase
+    // Game play phase
     if(game->phase == 2) {
-        if(packet[0] != 'S' && packet[0] != 'Q') {
-            send_error(current->socket, 102);
-            return;
-        }
-
         if(packet[0] == 'Q') {
             char response[BUFFER_SIZE] = {0};
             sprintf(response, "G %d", other->ships_remaining);
