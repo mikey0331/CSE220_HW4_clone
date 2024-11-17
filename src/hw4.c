@@ -144,7 +144,6 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         return;
     }
 
-    // Phase 0: Begin phase
     if(game->phase == 0) {
         if(packet[0] != 'B') {
             send_error(current->socket, 100);
@@ -172,22 +171,16 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         return;
     }
 
-    // Phase 1: Initialize phase
     if(game->phase == 1) {
         if(packet[0] != 'I') {
             send_error(current->socket, 101);
             return;
         }
 
-        char *token = strtok(packet + 2, " ");
-        int param_count = 0;
-        while(token != NULL) {
-            param_count++;
-            token = strtok(NULL, " ");
-        }
-        
-        if(param_count != MAX_SHIPS * 4) {
-            send_error(current->socket, 201);
+        Ship ships[MAX_SHIPS];
+        int result = validate_init(game, packet, ships);
+        if(result != 0) {
+            send_error(current->socket, result);
             return;
         }
 
@@ -199,7 +192,6 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         return;
     }
 
-    // Phase 2: Game play phase
     if(game->phase == 2) {
         if(packet[0] != 'S' && packet[0] != 'Q') {
             send_error(current->socket, 102);
@@ -207,7 +199,19 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         }
 
         if(packet[0] == 'Q') {
-            send_ack(current->socket);
+            char response[BUFFER_SIZE] = {0};
+            sprintf(response, "G %d", other->ships_remaining);
+            for(int i = 0; i < game->height; i++) {
+                for(int j = 0; j < game->width; j++) {
+                    if(current->shots[i][j]) {
+                        char hit = other->board[i][j] ? 'H' : 'M';
+                        char temp[32];
+                        sprintf(temp, " %c %d %d", hit, i, j);
+                        strcat(response, temp);
+                    }
+                }
+            }
+            write(current->socket, response, strlen(response));
             return;
         }
 
@@ -217,11 +221,32 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 send_error(current->socket, 202);
                 return;
             }
-            send_ack(current->socket);
+            if(row < 0 || row >= game->height || col < 0 || col >= game->width) {
+                send_error(current->socket, 400);
+                return;
+            }
+            if(current->shots[row][col]) {
+                send_error(current->socket, 401);
+                return;
+            }
+            
+            current->shots[row][col] = 1;
+            char result = other->board[row][col] ? 'H' : 'M';
+            if(result == 'H') {
+                other->ships_remaining--;
+            }
+            send_shot_response(current->socket, other->ships_remaining, result);
+            
+            if(other->ships_remaining == 0) {
+                send_halt(other->socket, 0);
+                send_halt(current->socket, 1);
+                game->phase = 3;
+            }
             return;
         }
     }
 }
+
 
 int main() {
     GameState game = {0};
