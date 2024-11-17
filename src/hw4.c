@@ -1,3 +1,4 @@
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -165,7 +166,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 new_col += col;
                 
                 if(new_row < 0 || new_row >= game->height || 
-                   new_col < 0 || new_col >= game->width - 1) {
+                   new_col < 0 || new_col >= game->width) {
                     send_error(current->socket, 301);
                     return;
                 }
@@ -198,7 +199,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             char response[BUFFER_SIZE] = {0};
             sprintf(response, "G %d", other->ships_remaining);
             for(int i = 0; i < game->height; i++) {
-                for(int j = 0; j < game->width - 1; j++) {
+                for(int j = 0; j < game->width ; j++) {
                     if(current->shots[i][j]) {
                         char hit = other->board[i][j] ? 'H' : 'M';
                         sprintf(response + strlen(response), " %c %d %d", hit, i, j);
@@ -216,7 +217,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         }
         
         if(row < 0 || row >= game->height || 
-           col < 0 || col >= game->width - 1) {
+           col < 0 || col >= game->width) {
             send_ack(current->socket);
             return;
         }
