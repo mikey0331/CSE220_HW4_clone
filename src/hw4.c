@@ -30,7 +30,6 @@ typedef struct {
     int phase;
     int current_turn;
 } GameState;
-
 const int TETRIS_PIECES[7][4][2] = {
     {{0,0}, {0,1}, {0,2}, {0,3}}, // I
     {{0,0}, {0,1}, {1,0}, {1,1}}, // O
@@ -79,9 +78,6 @@ int validate_board_command(const char* packet, int is_p1) {
         char extra;
         int matched = sscanf(ptr, "%d %d%c", &w, &h, &extra);
         if (matched != 2 || w < 10 || h < 10) return 0;
-    } else {
-        // P2 must send just 'B'
-        if (strlen(packet) > 2) return 0;  // Allow for possible space after B
     }
     return 1;
 }
@@ -100,11 +96,6 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
     // Board setup phase
     if(game->phase == 0) {
-        if(packet[0] != 'B') {
-            send_error(current->socket, 100);
-            return;
-        }
-
         if(!validate_board_command(packet, is_p1)) {
             send_error(current->socket, 200);
             return;
@@ -133,12 +124,14 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             return;
         }
 
-        // Count parameters
-        char *temp = strdup(packet + 1);
-        char *token = strtok(temp, " ");
+        // Parse parameters
+        int params[MAX_SHIPS * 4] = {0};
+        char *temp = strdup(packet);
+        char *token = strtok(temp + 1, " ");
         int param_count = 0;
-        while(token) {
-            param_count++;
+        
+        while(token && param_count < MAX_SHIPS * 4) {
+            params[param_count++] = atoi(token);
             token = strtok(NULL, " ");
         }
         free(temp);
@@ -148,75 +141,65 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             return;
         }
 
-        // Parse parameters
-        int params[MAX_SHIPS * 4] = {0};
-        token = strtok(packet + 1, " ");
-        for(int i = 0; i < MAX_SHIPS * 4; i++) {
-            if(!token) break;
-            params[i] = atoi(token);
-            token = strtok(NULL, " ");
-        }
-
-        // Validate piece types
+        // Validate piece types and rotations
         for(int i = 0; i < MAX_SHIPS; i++) {
             int type = params[i * 4];
+            int rotation = params[i * 4 + 1];
+            
             if(type < 1 || type > 7) {
                 send_error(current->socket, 300);
                 return;
             }
-        }
-
-        // Validate rotations
-        for(int i = 0; i < MAX_SHIPS; i++) {
-            int rotation = params[i * 4 + 1];
             if(rotation < 0 || rotation > 3) {
                 send_error(current->socket, 301);
                 return;
             }
         }
 
-        // Clear board and place ships
+        // Clear board
         memset(current->board, 0, sizeof(current->board));
         current->ships_remaining = MAX_SHIPS * 4;
 
         // Try to place each ship
         for(int i = 0; i < MAX_SHIPS; i++) {
-            int type = params[i * 4];
+            int type = params[i * 4] - 1;
             int rotation = params[i * 4 + 1];
             int col = params[i * 4 + 2];
             int row = params[i * 4 + 3];
 
-            if(col < 0 || col >= game->width || row < 0 || row >= game->height) {
-                send_error(current->socket, 302);
-                return;
-            }
-
-            int piece_idx = type - 1;
+            // Calculate ship positions after rotation
+            int positions[4][2];
             for(int j = 0; j < 4; j++) {
-                int new_row = TETRIS_PIECES[piece_idx][j][0];
-                int new_col = TETRIS_PIECES[piece_idx][j][1];
+                int piece_row = TETRIS_PIECES[type][j][0];
+                int piece_col = TETRIS_PIECES[type][j][1];
                 
                 // Apply rotation
                 for(int r = 0; r < rotation; r++) {
-                    int temp = new_row;
-                    new_row = -new_col;
-                    new_col = temp;
+                    int temp = piece_row;
+                    piece_row = -piece_col;
+                    piece_col = temp;
                 }
                 
-                new_row += row;
-                new_col += col;
-
-                if(new_col < 0 || new_col >= game->width ||
-                   new_row < 0 || new_row >= game->height) {
+                positions[j][0] = row + piece_row;
+                positions[j][1] = col + piece_col;
+                
+                // Check boundaries
+                if(positions[j][0] < 0 || positions[j][0] >= game->height ||
+                   positions[j][1] < 0 || positions[j][1] >= game->width) {
                     send_error(current->socket, 302);
                     return;
                 }
-
-                if(current->board[new_row][new_col]) {
+                
+                // Check overlap
+                if(current->board[positions[j][0]][positions[j][1]]) {
                     send_error(current->socket, 303);
                     return;
                 }
-                current->board[new_row][new_col] = 1;
+            }
+            
+            // Place the ship
+            for(int j = 0; j < 4; j++) {
+                current->board[positions[j][0]][positions[j][1]] = 1;
             }
         }
 
@@ -232,18 +215,12 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
     // Game play phase
     if(game->phase == 2) {
-        if(packet[0] != 'S' && packet[0] != 'Q') {
-            send_error(current->socket, 102);
-            return;
-        }
-
         // Check if it's the player's turn
         if((is_p1 && game->current_turn != 1) || (!is_p1 && game->current_turn != 2)) {
             send_error(current->socket, 102);
             return;
         }
 
-        // Handle query
         if(packet[0] == 'Q') {
             char response[BUFFER_SIZE] = {0};
             sprintf(response, "G %d", other->ships_remaining);
@@ -259,16 +236,20 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             return;
         }
 
-        // Handle shot
+        if(packet[0] != 'S') {
+            send_error(current->socket, 102);
+            return;
+        }
+
+        // Parse shot coordinates
         int row, col;
-        char extra;
-        int matched = sscanf(packet + 1, "%d %d%c", &row, &col, &extra);
-        if(matched != 2) {
+        if(sscanf(packet + 1, "%d %d", &row, &col) != 2) {
             send_error(current->socket, 202);
             return;
         }
 
-        if(col < 0 || col >= game->width || row < 0 || row >= game->height) {
+        // Validate coordinates
+        if(row < 0 || row >= game->height || col < 0 || col >= game->width) {
             send_error(current->socket, 400);
             return;
         }
