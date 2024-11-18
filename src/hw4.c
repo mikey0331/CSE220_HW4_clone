@@ -1,4 +1,4 @@
-#include <stdio.h>
+Copy#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -72,6 +72,22 @@ void send_halt(int socket, int is_winner) {
 void send_shot_response(int socket, int ships_remaining, char result) {
     char response[32];
     sprintf(response, "R %d %c", ships_remaining, result);
+    send_response(socket, response);
+}
+
+void send_query_response(int socket, int ships_remaining, int board[MAX_BOARD][MAX_BOARD], int shots[MAX_BOARD][MAX_BOARD]) {
+    char response[BUFFER_SIZE] = {0};
+    sprintf(response, "G %d", ships_remaining);
+    
+    for (int i = 0; i < MAX_BOARD; i++) {
+        for (int j = 0; j < MAX_BOARD; j++) {
+            if (shots[i][j]) {
+                char hit = board[i][j] ? 'H' : 'M';
+                sprintf(response + strlen(response), " %c %d %d", hit, i, j);
+            }
+        }
+    }
+    
     send_response(socket, response);
 }
 
@@ -272,7 +288,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 current->shots[row][col] = 1;
                 
                 if (was_hit) {
-                    // Find which ship was hit
+                    // Find which ship was hit and update hits
                     for (int s = 0; s < MAX_SHIPS; s++) {
                         for (int c = 0; c < SHIP_SIZE; c++) {
                             if (other->ships[s].cells[c][0] == row && 
@@ -299,17 +315,8 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 game->current_turn = game->current_turn == 1 ? 2 : 1;
             }
             else if (packet[0] == 'Q') {
-                char response[BUFFER_SIZE] = {0};
-                sprintf(response, "G %d", other->ships_remaining);
-                for (int i = 0; i < game->height; i++) {
-                    for (int j = 0; j < game->width; j++) {
-                        if (current->shots[i][j]) {
-                            char hit = other->board[i][j] ? 'H' : 'M';
-                            sprintf(response + strlen(response), " %c %d %d", hit, i, j);
-                        }
-                    }
-                }
-                send_response(current->socket, response);
+                send_query_response(current->socket, other->ships_remaining, other->board, other->shots);
+                game->current_turn = game->current_turn == 1 ? 2 : 1;
             }
             else {
                 send_error(current->socket, 102);
