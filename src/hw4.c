@@ -111,10 +111,8 @@ void process_packet(GameState *game, char *packet, int is_p1) {
     Player *current = is_p1 ? &game->p1 : &game->p2;
     Player *other = is_p1 ? &game->p2 : &game->p1;
 
-    // Trim leading spaces
     while (*packet == ' ') packet++;
 
-    // Handle forfeit immediately - valid at any time
     if (packet[0] == 'F') {
         send_halt(current->socket, 0);
         send_halt(other->socket, 1);
@@ -155,12 +153,14 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 return;
             }
 
-            // Count parameters
+            // Count and validate parameters
+            int params[MAX_SHIPS * 4] = {0};
+            int param_count = 0;
             char *temp = strdup(packet + 1);
             char *token = strtok(temp, " ");
-            int param_count = 0;
-            while (token) {
-                param_count++;
+            
+            while (token && param_count < MAX_SHIPS * 4) {
+                params[param_count++] = atoi(token);
                 token = strtok(NULL, " ");
             }
             free(temp);
@@ -170,7 +170,65 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 return;
             }
 
-            // Process ship placement
+            // Validate piece types first
+            for (int i = 0; i < MAX_SHIPS; i++) {
+                int type = params[i * 4];
+                if (type < 1 || type > 7) {
+                    send_error(current->socket, 300);
+                    return;
+                }
+                int rotation = params[i * 4 + 1];
+                if (rotation < 0 || rotation > 3) {
+                    send_error(current->socket, 301);
+                    return;
+                }
+            }
+
+            // Clear board
+            memset(current->board, 0, sizeof(current->board));
+            current->ships_remaining = 20;  // 5 ships * 4 pieces each
+
+            // Place ships
+            for (int i = 0; i < MAX_SHIPS; i++) {
+                int type = params[i * 4] - 1;
+                int rotation = params[i * 4 + 1];
+                int col = params[i * 4 + 2];
+                int row = params[i * 4 + 3];
+
+                int positions[4][2];
+                for (int j = 0; j < 4; j++) {
+                    int piece_row = TETRIS_PIECES[type][j][0];
+                    int piece_col = TETRIS_PIECES[type][j][1];
+                    
+                    for (int r = 0; r < rotation; r++) {
+                        int temp = piece_row;
+                        piece_row = -piece_col;
+                        piece_col = temp;
+                    }
+                    
+                    positions[j][0] = row + piece_row;
+                    positions[j][1] = col + piece_col;
+                    
+                    // Check boundaries
+                    if (positions[j][0] < 0 || positions[j][0] >= game->height ||
+                        positions[j][1] < 0 || positions[j][1] >= game->width) {
+                        send_error(current->socket, 302);
+                        return;
+                    }
+                    
+                    // Check overlap
+                    if (current->board[positions[j][0]][positions[j][1]]) {
+                        send_error(current->socket, 303);
+                        return;
+                    }
+                }
+
+                // Place ship
+                for (int j = 0; j < 4; j++) {
+                    current->board[positions[j][0]][positions[j][1]] = 1;
+                }
+            }
+
             send_ack(current->socket);
             current->ready = 2;
             if (game->p1.ready == 2 && game->p2.ready == 2) {
@@ -187,10 +245,8 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 }
 
                 int row, col;
-                char extra[32];
-                int matched = sscanf(packet + 1, "%d %d%[^\n]", &row, &col, extra);
-                
-                if (matched != 2) {
+                char extra;
+                if (sscanf(packet + 1, "%d %d%c", &row, &col, &extra) != 2) {
                     send_error(current->socket, 202);
                     return;
                 }
