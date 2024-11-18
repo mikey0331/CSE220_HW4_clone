@@ -90,16 +90,20 @@ void process_packet(GameState *game, char *packet, int is_p1) {
     // Phase 0: Board Setup
     if(game->phase == 0) {
         if(packet[0] != 'B') {
-            send_error(current->socket, 200);
+            send_error(current->socket, 100);
             return;
         }
-        
+
         if(is_p1) {
             int width = 0, height = 0;
             char extra[2] = {0};
             int params = sscanf(packet + 2, "%d %d%1s", &width, &height, extra);
             
-            if(params != 2 || width != 11 || height != 10) {
+            if(params != 2) {
+                send_error(current->socket, 100);
+                return;
+            }
+            if(width != 11 || height != 10) {
                 send_error(current->socket, 200);
                 return;
             }
@@ -107,7 +111,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             game->height = height;
         } else {
             if(strlen(packet) != 1) {
-                send_error(current->socket, 200);
+                send_error(current->socket, 100);
                 return;
             }
         }
@@ -136,12 +140,31 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 send_error(current->socket, 201);
                 return;
             }
+
+            for(int i = 0; i < MAX_SHIPS; i++) {
+                int type = params[i * 4];
+                int rotation = params[i * 4 + 1];
+                
+                if(type < 1 || type > 7) {
+                    send_error(current->socket, 300);
+                    return;
+                }
+                if(rotation < 0 || rotation > 3) {
+                    send_error(current->socket, 301);
+                    return;
+                }
+            }
+
+            send_ack(current->socket);
+            current->ready = 2;
+            if(game->p1.ready == 2 && game->p2.ready == 2) {
+                game->phase = 2;
+            }
+            return;
         }
-        send_ack(current->socket);
-        return;
     }
 
-    // Phase 2: Game Play
+    // Phase 2: Gameplay
     if(game->phase == 2) {
         if(packet[0] == 'S') {
             int row, col;
@@ -149,15 +172,17 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 send_error(current->socket, 202);
                 return;
             }
+            
             if(row < 0 || row >= game->height || col < 0 || col >= game->width) {
                 send_error(current->socket, 400);
                 return;
             }
+
             if(current->shots[row][col]) {
                 send_error(current->socket, 401);
                 return;
             }
-            
+
             current->shots[row][col] = 1;
             if(other->board[row][col]) {
                 other->ships_remaining--;
