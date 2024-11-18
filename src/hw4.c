@@ -164,6 +164,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
             if (is_p1) {
                 sscanf(packet + 1, "%d %d", &game->width, &game->height);
+                send_ack(current->socket);  // Only send ACK to P1
             }
 
             current->ready = 1;
@@ -171,7 +172,6 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             current->ship_count = 0;
             memset(current->board, 0, sizeof(current->board));
             memset(current->shots, 0, sizeof(current->shots));
-            send_ack(current->socket);
             
             if (game->p1.ready && game->p2.ready) {
                 game->phase = 1;
@@ -184,7 +184,11 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 return;
             }
 
-            // Count parameters
+            int values[20];
+            char *str = packet + 1;
+            int count = 0;
+            
+            // Count parameters first
             char *temp = strdup(packet + 1);
             char *token = strtok(temp, " ");
             int param_count = 0;
@@ -198,11 +202,8 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 send_error(current->socket, 201);
                 return;
             }
-
-            int values[20];
-            char *str = packet + 1;
-            int count = 0;
             
+            // Parse all parameters
             while (*str && count < 20) {
                 while (*str == ' ') str++;
                 if (sscanf(str, "%d", &values[count]) != 1) {
@@ -272,7 +273,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 current->shots[row][col] = 1;
                 
                 if (was_hit) {
-                    // Find which ship was hit
+                    // Find which ship was hit and update hits
                     for (int s = 0; s < MAX_SHIPS; s++) {
                         for (int c = 0; c < SHIP_SIZE; c++) {
                             if (other->ships[s].cells[c][0] == row && 
