@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>
 #include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
@@ -8,6 +7,7 @@
 #include <sys/select.h>
 #include <errno.h>
 #include <netinet/in.h>
+#include <stdbool.h>
 
 #define PORT1 2201
 #define PORT2 2202
@@ -64,26 +64,6 @@ void send_shot_response(int socket, int ships_remaining, char result) {
     write(socket, response, strlen(response));
 }
 
-void get_rotated_coords(int piece, int rotation, int base_row, int base_col, int coords[4][2]) {
-    for(int i = 0; i < 4; i++) {
-        coords[i][0] = TETRIS_PIECES[piece][i][0];
-        coords[i][1] = TETRIS_PIECES[piece][i][1];
-    }
-
-    for(int r = 0; r < rotation; r++) {
-        for(int i = 0; i < 4; i++) {
-            int temp = coords[i][0];
-            coords[i][0] = -coords[i][1];
-            coords[i][1] = temp;
-        }
-    }
-
-    for(int i = 0; i < 4; i++) {
-        coords[i][0] += base_row;
-        coords[i][1] += base_col;
-    }
-}
-
 bool validate_ship_placement(char *packet, GameState *game, Player *player) {
     int params[MAX_SHIPS * 4];
     int count = 0;
@@ -94,7 +74,10 @@ bool validate_ship_placement(char *packet, GameState *game, Player *player) {
         token = strtok(NULL, " ");
     }
 
-    if(count != MAX_SHIPS * 4) return false;
+    if(count != MAX_SHIPS * 4) {
+        send_error(player->socket, 201);
+        return false;
+    }
 
     bool temp_board[MAX_BOARD_SIZE][MAX_BOARD_SIZE] = {0};
 
@@ -104,20 +87,34 @@ bool validate_ship_placement(char *packet, GameState *game, Player *player) {
         int col = params[i * 4 + 2];
         int row = params[i * 4 + 3];
 
-        if(type < 1 || type > 7) return false;
-        if(rotation < 0 || rotation > 3) return false;
+        if(type < 1 || type > 7) {
+            send_error(player->socket, 300);
+            return false;
+        }
+        if(rotation < 0 || rotation > 3) {
+            send_error(player->socket, 301);
+            return false;
+        }
+        if(row < 0 || row >= game->height || col < 0 || col >= game->width) {
+            send_error(player->socket, 302);
+            return false;
+        }
 
-        int ship_coords[4][2];
-        get_rotated_coords(type - 1, rotation, row, col, ship_coords);
-
+        // Check ship placement and overlap
         for(int j = 0; j < 4; j++) {
-            int new_row = ship_coords[j][0];
-            int new_col = ship_coords[j][1];
+            int new_row = row + TETRIS_PIECES[type-1][j][0];
+            int new_col = col + TETRIS_PIECES[type-1][j][1];
             
             if(new_row < 0 || new_row >= game->height ||
-               new_col < 0 || new_col >= game->width) return false;
-               
-            if(temp_board[new_row][new_col]) return false;
+               new_col < 0 || new_col >= game->width) {
+                send_error(player->socket, 302);
+                return false;
+            }
+            
+            if(temp_board[new_row][new_col]) {
+                send_error(player->socket, 303);
+                return false;
+            }
             
             temp_board[new_row][new_col] = true;
         }
@@ -131,7 +128,12 @@ void process_packet(GameState *game, char *packet, int is_p1) {
     Player *current = is_p1 ? &game->p1 : &game->p2;
     Player *other = is_p1 ? &game->p2 : &game->p1;
 
-    if(packet[0] == 'F') {
+    if(game->phase == 0 && packet[0] != 'B') {
+        send_error(current->socket, 100);
+        return;
+    }
+
+    if(packet[0] == 'F' && game->phase > 0) {
         send_halt(current->socket, 0);
         send_halt(other->socket, 1);
         game->phase = 3;
@@ -139,28 +141,23 @@ void process_packet(GameState *game, char *packet, int is_p1) {
     }
 
     if(game->phase == 0) {
-        if(packet[0] != 'B') {
-            send_error(current->socket, 100);
-            return;
+        if(is_p1) {
+            int w = 0, h = 0;
+            if(strncmp(packet, "B ", 2) != 0 || 
+               sscanf(packet + 2, "%d %d", &w, &h) != 2 || 
+               w < 10 || h < 10 || 
+               w > MAX_BOARD_SIZE || h > MAX_BOARD_SIZE) {
+                send_error(current->socket, 200);
+                return;
+            }
+            game->width = w;
+            game->height = h;
+        } else {
+            if(strcmp(packet, "B") != 0) {
+                send_error(current->socket, 200);
+                return;
+            }
         }
-
-if(is_p1) {
-    int w = 0, h = 0;
-    if(strncmp(packet, "B ", 2) != 0 || 
-       sscanf(packet + 2, "%d %d", &w, &h) != 2 || 
-       w < 10 || h < 10 || 
-       w > MAX_BOARD_SIZE || h > MAX_BOARD_SIZE) {
-        send_error(current->socket, 200);
-        return;
-    }
-    game->width = w;
-    game->height = h;
-} else {
-    if(strcmp(packet, "B") != 0) {
-        send_error(current->socket, 200);
-        return;
-    }
-}
 
         send_ack(current->socket);
         current->ready = 1;
@@ -175,11 +172,10 @@ if(is_p1) {
         }
 
         if(!validate_ship_placement(packet, game, current)) {
-            send_error(current->socket, 201);
-            return;
+            return;  // Error already sent in validate_ship_placement
         }
 
-        current->ships_remaining = 5;
+        current->ships_remaining = 20;  // 4 squares * 5 ships
         send_ack(current->socket);
         current->ready = 2;
         if(game->p1.ready == 2 && game->p2.ready == 2) game->phase = 2;
