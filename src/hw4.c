@@ -103,25 +103,34 @@ void process_packet(GameState *game, char *packet, int is_p1) {
     Player *current = is_p1 ? &game->p1 : &game->p2;
     Player *other = is_p1 ? &game->p2 : &game->p1;
 
-    // Handle invalid packet type first
-    if (game->phase == 0 && packet[0] != 'B') {
-        send_error(current->socket, 100);
-        return;
-    }
-
+    // Phase 0: Begin packet handling
     if (game->phase == 0) {
+        // Check for valid Begin packet
+        if (packet[0] != 'B' || 
+            (is_p1 && (strlen(packet) <= 2 || packet[1] != ' '))) {
+            // For any invalid packet in phase 0, treat as forfeit
+            send_halt(current->socket, 0);  // Current player loses
+            send_halt(other->socket, 1);    // Other player wins
+            game->phase = 3;
+            return;
+        }
+
         if (is_p1) {
-            int width, height;
-            if (!validate_begin_packet(packet, &width, &height)) {
-                send_error(current->socket, 200);
+            int w = 0, h = 0;
+            if (sscanf(packet + 2, "%d %d", &w, &h) != 2 || 
+                w < 10 || h < 10) {
+                send_halt(current->socket, 0);
+                send_halt(other->socket, 1);
+                game->phase = 3;
                 return;
             }
-            game->width = width;
-            game->height = height;
+            game->width = w;
+            game->height = h;
         } else {
-            // Player 2 should only send "B"
             if (strlen(packet) > 1) {
-                send_error(current->socket, 200);
+                send_halt(current->socket, 0);
+                send_halt(other->socket, 1);
+                game->phase = 3;
                 return;
             }
         }
@@ -135,8 +144,17 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         return;
     }
 
-    if(game->phase == 1) {
-        if(packet[0] != 'I') {
+       if (packet[0] == 'F') {
+        send_halt(current->socket, 0);
+        send_halt(other->socket, 1);
+        game->phase = 3;
+        return;
+    }
+
+
+
+    if (game->phase == 1) {
+        if (packet[0] != 'I') {
             send_error(current->socket, 101);
             return;
         }
@@ -219,8 +237,8 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         return;
     }
 
-    if(game->phase == 2) {
-        if(packet[0] != 'S' && packet[0] != 'Q') {
+    if (game->phase == 2) {
+        if (packet[0] != 'S' && packet[0] != 'Q') {
             send_error(current->socket, 102);
             return;
         }
