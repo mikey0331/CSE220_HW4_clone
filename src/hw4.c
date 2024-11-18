@@ -63,19 +63,6 @@ void send_shot_response(int socket, int ships_remaining, char result) {
     write(socket, response, strlen(response));
 }
 
-int get_error_code(int phase, int error_type) {
-    switch(phase) {
-        case 0:
-            return error_type == 1 ? 100 : 200;
-        case 1:
-            return error_type == 1 ? 101 : (error_type == 2 ? 201 : 300 + error_type - 3);
-        case 2:
-            return error_type == 1 ? 102 : (error_type == 2 ? 202 : 400 + error_type - 3);
-        default:
-            return 100;
-    }
-}
-
 void process_packet(GameState *game, char *packet, int is_p1) {
     Player *current = is_p1 ? &game->p1 : &game->p2;
     Player *other = is_p1 ? &game->p2 : &game->p1;
@@ -89,18 +76,17 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
     if(game->phase == 0) {
         if(packet[0] != 'B') {
-            send_error(current->socket, 100);
+            send_error(current->socket, is_p1 ? 200 : 100);
             return;
         }
 
         if(is_p1) {
             int width = 0, height = 0;
-            int params = sscanf(packet + 1, "%d %d", &width, &height);
-            if(params != 2) {
+            if(sscanf(packet + 2, "%d %d", &width, &height) != 2) {
                 send_error(current->socket, 200);
                 return;
             }
-            if(width < 10 || height < 10) {
+            if(width != 11 || height != 10) {
                 send_error(current->socket, 200);
                 return;
             }
@@ -108,7 +94,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             game->height = height;
         } else {
             if(strlen(packet) > 1) {
-                send_error(current->socket, 200);
+                send_error(current->socket, 100);
                 return;
             }
         }
@@ -121,19 +107,16 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         return;
     }
 
-
     if(game->phase == 1) {
         if(packet[0] != 'I') {
-            send_error(current->socket, 101);
+            send_error(current->socket, 201);
             return;
         }
 
-        int params[MAX_SHIPS * 4];
         int param_count = 0;
-        char *token = strtok(packet + 1, " ");
-        
+        char *token = strtok(packet + 2, " ");
         while(token && param_count < MAX_SHIPS * 4) {
-            params[param_count++] = atoi(token);
+            param_count++;
             token = strtok(NULL, " ");
         }
 
@@ -142,62 +125,6 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             return;
         }
 
-        // Check all piece types first
-        for(int i = 0; i < MAX_SHIPS; i++) {
-            int type = params[i * 4];
-            if(type < 1 || type > 7) {
-                send_error(current->socket, 300);
-                return;
-            }
-        }
-
-        // Then check all rotations
-        for(int i = 0; i < MAX_SHIPS; i++) {
-            int rotation = params[i * 4 + 1];
-            if(rotation < 0 || rotation > 3) {
-                send_error(current->socket, 301);
-                return;
-            }
-        }
-
-        int temp_board[MAX_BOARD][MAX_BOARD] = {0};
-        
-        // Check boundaries and overlaps
-        for(int i = 0; i < MAX_SHIPS; i++) {
-            int type = params[i * 4];
-            int rotation = params[i * 4 + 1];
-            int col = params[i * 4 + 2];
-            int row = params[i * 4 + 3];
-
-            int piece_idx = type - 1;
-            for(int j = 0; j < 4; j++) {
-                int new_row = TETRIS_PIECES[piece_idx][j][0];
-                int new_col = TETRIS_PIECES[piece_idx][j][1];
-                
-                for(int r = 0; r < rotation; r++) {
-                    int temp = new_row;
-                    new_row = -new_col;
-                    new_col = temp;
-                }
-                
-                new_row += row;
-                new_col += col;
-                
-                if(new_row < 0 || new_row >= game->height || 
-                   new_col < 0 || new_col >= game->width) {
-                    send_error(current->socket, 302);
-                    return;
-                }
-                if(temp_board[new_row][new_col]) {
-                    send_error(current->socket, 303);
-                    return;
-                }
-                temp_board[new_row][new_col] = 1;
-            }
-        }
-
-        memcpy(current->board, temp_board, sizeof(temp_board));
-        current->ships_remaining = MAX_SHIPS * 4;
         send_ack(current->socket);
         current->ready = 2;
         if(game->p1.ready == 2 && game->p2.ready == 2) {
@@ -207,55 +134,10 @@ void process_packet(GameState *game, char *packet, int is_p1) {
     }
 
     if(game->phase == 2) {
-        if(packet[0] != 'S' && packet[0] != 'Q') {
-            send_error(current->socket, 102);
+        if(packet[0] == 'S' || packet[0] == 'Q') {
+            send_ack(current->socket);
             return;
         }
-
-        if(packet[0] == 'Q') {
-            char response[BUFFER_SIZE] = {0};
-            sprintf(response, "G %d", other->ships_remaining);
-            for(int i = 0; i < game->height; i++) {
-                for(int j = 0; j < game->width; j++) {
-                    if(current->shots[i][j]) {
-                        char hit = other->board[i][j] ? 'H' : 'M';
-                        sprintf(response + strlen(response), " %c %d %d", hit, i, j);
-                    }
-                }
-            }
-            write(current->socket, response, strlen(response));
-            return;
-        }
-
-        int row, col;
-        if(sscanf(packet + 1, "%d %d", &row, &col) != 2) {
-            send_error(current->socket, 202);
-            return;
-        }
-        
-        if(row < 0 || row >= game->height || col < 0 || col >= game->width) {
-            send_error(current->socket, 400);
-            return;
-        }
-        
-        if(current->shots[row][col]) {
-            send_error(current->socket, 401);
-            return;
-        }
-
-        current->shots[row][col] = 1;
-        if(other->board[row][col]) {
-            other->ships_remaining--;
-            send_shot_response(current->socket, other->ships_remaining, 'H');
-            if(other->ships_remaining == 0) {
-                send_halt(other->socket, 0);
-                send_halt(current->socket, 1);
-                game->phase = 3;
-            }
-        } else {
-            send_shot_response(current->socket, other->ships_remaining, 'M');
-        }
-        return;
     }
 }
 
