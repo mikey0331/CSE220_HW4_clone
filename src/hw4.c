@@ -80,24 +80,39 @@ void process_packet(GameState *game, char *packet, int is_p1) {
     Player *current = is_p1 ? &game->p1 : &game->p2;
     Player *other = is_p1 ? &game->p2 : &game->p1;
 
+    if(packet[0] == 'F') {
+        send_halt(current->socket, 0);
+        send_halt(other->socket, 1);
+        game->phase = 3;
+        return;
+    }
+
     if(game->phase == 0) {
         if(packet[0] != 'B') {
             send_error(current->socket, 100);
             return;
         }
-        
+
         if(is_p1) {
-            int width = 0, height = 0;
-            char extra[2] = {0};
-            int params = sscanf(packet + 2, "%d %d%1s", &width, &height, extra);
-            
-            if(params != 2 || width != 11 || height != 10) {
-                send_error(current->socket, 100);
+            int w = 0, h = 0;
+            int params = sscanf(packet + 1, "%d %d", &w, &h);
+            if(params != 2) {
+                send_error(current->socket, 200);
                 return;
             }
-            game->width = width;
-            game->height = height;
+            if(w < 10 || h < 10) {
+                send_error(current->socket, 200);
+                return;
+            }
+            game->width = w;
+            game->height = h;
+        } else {
+            if(strlen(packet) > 1) {
+                send_error(current->socket, 200);
+                return;
+            }
         }
+        
         send_ack(current->socket);
         current->ready = 1;
         if(game->p1.ready && game->p2.ready) {
@@ -106,15 +121,141 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         return;
     }
 
-    if(packet[0] == 'F') {
+    if(game->phase == 1) {
+        if(packet[0] != 'I') {
+            send_error(current->socket, 101);
+            return;
+        }
+
+        int params[MAX_SHIPS * 4];
+        int param_count = 0;
+        char *token = strtok(packet + 1, " ");
+        
+        while(token && param_count < MAX_SHIPS * 4) {
+            params[param_count++] = atoi(token);
+            token = strtok(NULL, " ");
+        }
+
+        if(param_count != MAX_SHIPS * 4) {
+            send_error(current->socket, 201);
+            return;
+        }
+
+        // Check all piece types first
+        for(int i = 0; i < MAX_SHIPS; i++) {
+            int type = params[i * 4];
+            if(type < 1 || type > 7) {
+                send_error(current->socket, 300);
+                return;
+            }
+        }
+
+        // Then check all rotations
+        for(int i = 0; i < MAX_SHIPS; i++) {
+            int rotation = params[i * 4 + 1];
+            if(rotation < 0 || rotation > 3) {
+                send_error(current->socket, 301);
+                return;
+            }
+        }
+
+        int temp_board[MAX_BOARD][MAX_BOARD] = {0};
+        
+        // Check boundaries and overlaps
+        for(int i = 0; i < MAX_SHIPS; i++) {
+            int type = params[i * 4];
+            int rotation = params[i * 4 + 1];
+            int col = params[i * 4 + 2];
+            int row = params[i * 4 + 3];
+
+            int piece_idx = type - 1;
+            for(int j = 0; j < 4; j++) {
+                int new_row = TETRIS_PIECES[piece_idx][j][0];
+                int new_col = TETRIS_PIECES[piece_idx][j][1];
+                
+                for(int r = 0; r < rotation; r++) {
+                    int temp = new_row;
+                    new_row = -new_col;
+                    new_col = temp;
+                }
+                
+                new_row += row;
+                new_col += col;
+                
+                if(new_row < 0 || new_row >= game->height || 
+                   new_col < 0 || new_col >= game->width) {
+                    send_error(current->socket, 302);
+                    return;
+                }
+                if(temp_board[new_row][new_col]) {
+                    send_error(current->socket, 303);
+                    return;
+                }
+                temp_board[new_row][new_col] = 1;
+            }
+        }
+
+        memcpy(current->board, temp_board, sizeof(temp_board));
+        current->ships_remaining = MAX_SHIPS * 4;
         send_ack(current->socket);
-        send_halt(current->socket, 0);
-        send_halt(other->socket, 1);
-        game->phase = 3;
+        current->ready = 2;
+        if(game->p1.ready == 2 && game->p2.ready == 2) {
+            game->phase = 2;
+        }
         return;
     }
 
-    send_ack(current->socket);
+    if(game->phase == 2) {
+        if(packet[0] != 'S' && packet[0] != 'Q') {
+            send_error(current->socket, 102);
+            return;
+        }
+
+        if(packet[0] == 'Q') {
+            char response[BUFFER_SIZE] = {0};
+            sprintf(response, "G %d", other->ships_remaining);
+            for(int i = 0; i < game->height; i++) {
+                for(int j = 0; j < game->width; j++) {
+                    if(current->shots[i][j]) {
+                        char hit = other->board[i][j] ? 'H' : 'M';
+                        sprintf(response + strlen(response), " %c %d %d", hit, i, j);
+                    }
+                }
+            }
+            write(current->socket, response, strlen(response));
+            return;
+        }
+
+        int row, col;
+        if(sscanf(packet + 1, "%d %d", &row, &col) != 2) {
+            send_error(current->socket, 202);
+            return;
+        }
+        
+        if(row < 0 || row >= game->height || col < 0 || col >= game->width) {
+            send_error(current->socket, 400);
+            return;
+        }
+        
+        if(current->shots[row][col]) {
+            send_error(current->socket, 401);
+            return;
+        }
+
+        current->shots[row][col] = 1;
+        if(other->board[row][col]) {
+            other->ships_remaining--;
+            send_shot_response(current->socket, other->ships_remaining, 'H');
+            if(other->ships_remaining == 0) {
+                send_halt(other->socket, 0);
+                send_halt(current->socket, 1);
+                game->phase = 3;
+            }
+        } else {
+            send_shot_response(current->socket, other->ships_remaining, 'M');
+        }
+        return;
+    }
 }
 
 int main() {
