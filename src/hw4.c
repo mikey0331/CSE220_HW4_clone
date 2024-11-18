@@ -67,90 +67,26 @@ void send_shot_response(int socket, int ships_remaining, char result) {
     send_response(socket, response);
 }
 
-// Validate board initialization parameters
-int validate_board_params(const char* packet, int is_p1) {
-    if (is_p1) {
-        int w = 0, h = 0;
-        int params = sscanf(packet + 1, "%d %d", &w, &h);
-        if (params != 2 || w < 10 || h < 10) {
-            return 200;
-        }
-    } else {
-        // P2 should not have any parameters
-        char extra[2];
-        if (sscanf(packet + 1, "%1s", extra) == 1) {
-            return 200;
-        }
-    }
-    return 0;
-}
-
-// Check all initialization errors and return lowest error code
-int validate_initialization(const char* packet, int* piece_type, int* rotation, int* col, int* row) {
-    // Count parameters
-    int param_count = 0;
+int validate_board_command(const char* packet, int is_p1) {
+    // Skip 'B' and count parameters
     char *temp = strdup(packet + 1);
     char *token = strtok(temp, " ");
+    int param_count = 0;
     while (token) {
         param_count++;
         token = strtok(NULL, " ");
     }
     free(temp);
-    
-    if (param_count != 4) {
-        return 201;
-    }
 
-    if (sscanf(packet + 1, "%d %d %d %d", piece_type, rotation, col, row) != 4) {
-        return 201;
-    }
+    if (is_p1 && param_count != 2) return 0;
+    if (!is_p1 && param_count != 0) return 0;
 
-    // Check all possible errors and return the lowest one
-    int lowest_error = 0;
-    
-    // Check shape range (300)
-    if (*piece_type < 0 || *piece_type >= 7) {
-        lowest_error = 300;
+    if (is_p1) {
+        int w = 0, h = 0;
+        if (sscanf(packet + 1, "%d %d", &w, &h) != 2) return 0;
+        if (w < 10 || h < 10) return 0;
     }
-    
-    // Check rotation range (301)
-    if (*rotation < 0 || *rotation >= 4) {
-        if (lowest_error == 0 || 301 < lowest_error) {
-            lowest_error = 301;
-        }
-    }
-
-    return lowest_error;
-}
-
-// Verify ship placement and return the lowest error code if invalid
-int verify_ship_placement(GameState *game, Player *current, int piece_type, int rotation, int col, int row) {
-    int positions[4][2];
-    for (int i = 0; i < 4; i++) {
-        int new_row = row + TETRIS_PIECES[piece_type][i][0];
-        int new_col = col + TETRIS_PIECES[piece_type][i][1];
-        
-        // Check board boundaries (302)
-        if (new_row < 0 || new_row >= game->height ||
-            new_col < 0 || new_col >= game->width) {
-            return 302;
-        }
-        
-        // Check overlap (303)
-        if (current->board[new_row][new_col]) {
-            return 303;
-        }
-        
-        positions[i][0] = new_row;
-        positions[i][1] = new_col;
-    }
-    
-    // If we get here, the placement is valid, so place the ship
-    for (int i = 0; i < 4; i++) {
-        current->board[positions[i][0]][positions[i][1]] = 1;
-    }
-    
-    return 0;
+    return 1;
 }
 
 void process_packet(GameState *game, char *packet, int is_p1) {
@@ -175,9 +111,8 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 return;
             }
             
-            int error = validate_board_params(packet, is_p1);
-            if (error) {
-                send_error(current->socket, error);
+            if (!validate_board_command(packet, is_p1)) {
+                send_error(current->socket, 200);
                 return;
             }
 
@@ -185,9 +120,9 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 sscanf(packet + 1, "%d %d", &game->width, &game->height);
             }
 
-            current->ready = 1;
-            current->ships_remaining = 5;  // Initialize with 5 ships
             send_ack(current->socket);
+            current->ready = 1;
+            current->ships_remaining = MAX_SHIPS;
             
             if (game->p1.ready && game->p2.ready) {
                 game->phase = 1;
@@ -200,21 +135,79 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 return;
             }
 
-            int piece_type, rotation, col, row;
-            error = validate_initialization(packet, &piece_type, &rotation, &col, &row);
-            if (error) {
-                send_error(current->socket, error);
+            // Count parameters
+            char *temp = strdup(packet + 1);
+            char *token = strtok(temp, " ");
+            int param_count = 0;
+            while (token) {
+                param_count++;
+                token = strtok(NULL, " ");
+            }
+            free(temp);
+
+            if (param_count != 20) {  // 5 ships * 4 parameters each
+                send_error(current->socket, 201);
                 return;
             }
 
-            error = verify_ship_placement(game, current, piece_type, rotation, col, row);
-            if (error) {
-                send_error(current->socket, error);
-                return;
+            // Parse the initialization string
+            int values[20];  // Store all parsed values
+            char *str = packet + 1;
+            for (int i = 0; i < 20; i++) {
+                if (sscanf(str, "%d", &values[i]) != 1) {
+                    send_error(current->socket, 201);
+                    return;
+                }
+                // Move to next number
+                while (*str && *str != ' ') str++;
+                while (*str && *str == ' ') str++;
             }
 
-            current->ready = 2;
+            // Process each ship
+            for (int ship = 0; ship < 5; ship++) {
+                int piece_type = values[ship * 4];
+                int rotation = values[ship * 4 + 1];
+                int col = values[ship * 4 + 2];
+                int row = values[ship * 4 + 3];
+
+                // Validate piece type first (lowest error code)
+                if (piece_type < 0 || piece_type >= 7) {
+                    send_error(current->socket, 300);
+                    return;
+                }
+
+                if (rotation < 0 || rotation >= 4) {
+                    send_error(current->socket, 301);
+                    return;
+                }
+
+                // Check ship placement
+                for (int i = 0; i < 4; i++) {
+                    int new_row = row + TETRIS_PIECES[piece_type][i][0];
+                    int new_col = col + TETRIS_PIECES[piece_type][i][1];
+                    
+                    if (new_row < 0 || new_row >= game->height ||
+                        new_col < 0 || new_col >= game->width) {
+                        send_error(current->socket, 302);
+                        return;
+                    }
+                    
+                    if (current->board[new_row][new_col]) {
+                        send_error(current->socket, 303);
+                        return;
+                    }
+                }
+
+                // Place the ship
+                for (int i = 0; i < 4; i++) {
+                    int new_row = row + TETRIS_PIECES[piece_type][i][0];
+                    int new_col = col + TETRIS_PIECES[piece_type][i][1];
+                    current->board[new_row][new_col] = 1;
+                }
+            }
+
             send_ack(current->socket);
+            current->ready = 2;
             
             if (game->p1.ready == 2 && game->p2.ready == 2) {
                 game->phase = 2;
@@ -230,10 +223,10 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 }
 
                 int row, col;
-                char extra[2];
-                int params = sscanf(packet + 1, "%d %d%1s", &row, &col, extra);
+                char extra[32];
+                int matched = sscanf(packet + 1, "%d %d%[^\n]", &row, &col, extra);
                 
-                if (params != 2) {
+                if (matched != 2) {
                     send_error(current->socket, 202);
                     return;
                 }
@@ -335,12 +328,6 @@ int main() {
         perror("accept failed");
         exit(EXIT_FAILURE);
     }
-
-    // Initialize game state
-    memset(game.p1.board, 0, sizeof(game.p1.board));
-    memset(game.p1.shots, 0, sizeof(game.p1.shots));
-    memset(game.p2.board, 0, sizeof(game.p2.board));
-    memset(game.p2.shots, 0, sizeof(game.p2.shots));
 
     // Game loop
     char buffer[BUFFER_SIZE];
