@@ -50,7 +50,7 @@ void send_exact_response(int socket, const char *msg) {
 void send_error(int socket, int code) {
     char response[16];
     sprintf(response, "E %d", code);
-    send_exact_response(socket, response);
+     write(socket, response, strlen(response));
 }
 
 void send_ack(int socket) {
@@ -60,13 +60,13 @@ void send_ack(int socket) {
 void send_halt(int socket, int is_winner) {
     char response[16];
     sprintf(response, "H %d", is_winner);
-    send_exact_response(socket, response);
+    write(socket, response, strlen(response));
 }
 
 void send_shot_response(int socket, int ships_remaining, char result) {
     char response[32];
     sprintf(response, "R %d %c", ships_remaining, result);
-    send_exact_response(socket, response);
+    write(socket, response, strlen(response));
 }
 
 void process_packet(GameState *game, char *packet, int is_p1) {
@@ -228,8 +228,9 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         }
 
         // Query handling
+        char response[BUFFER_SIZE] = {0};
         if(packet[0] == 'Q') {
-            char response[BUFFER_SIZE] = {0};
+            
             sprintf(response, "G %d", other->ships_remaining);
             
             for(int i = 0; i < game->height; i++) {
