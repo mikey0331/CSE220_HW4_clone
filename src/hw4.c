@@ -41,26 +41,32 @@ const int TETRIS_PIECES[7][4][2] = {
     {{0,-1}, {0,0}, {1,0}, {1,1}} // Z
 };
 
+void send_exact_response(int socket, const char *msg) {
+    if (send(socket, msg, strlen(msg), 0) != strlen(msg)) {
+        perror("send failed");
+    }
+}
+
 void send_error(int socket, int code) {
     char response[16];
     sprintf(response, "E %d", code);
-    write(socket, response, strlen(response));
+    send_exact_response(socket, response);
 }
 
 void send_ack(int socket) {
-    write(socket, "A", 1);
+    send_exact_response(socket, "A");
 }
 
 void send_halt(int socket, int is_winner) {
     char response[16];
     sprintf(response, "H %d", is_winner);
-    write(socket, response, strlen(response));
+    send_exact_response(socket, response);
 }
 
 void send_shot_response(int socket, int ships_remaining, char result) {
     char response[32];
     sprintf(response, "R %d %c", ships_remaining, result);
-    write(socket, response, strlen(response));
+    send_exact_response(socket, response);
 }
 
 void process_packet(GameState *game, char *packet, int is_p1) {
@@ -284,6 +290,11 @@ int main() {
 
     int server1_fd = socket(AF_INET, SOCK_STREAM, 0);
     int server2_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server1_fd < 0 || server2_fd < 0) {
+        write(1, "Socket creation failed", 20);
+        return 1;
+    }
+
     int opt = 1;
     setsockopt(server1_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     setsockopt(server2_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -296,8 +307,15 @@ int main() {
     addr2.sin_addr.s_addr = INADDR_ANY;
     addr2.sin_port = htons(PORT2);
 
-    bind(server1_fd, (struct sockaddr *)&addr1, sizeof(addr1));
-    bind(server2_fd, (struct sockaddr *)&addr2, sizeof(addr2));
+    if (bind(server1_fd, (struct sockaddr *)&addr1, sizeof(addr1)) < 0) {
+        write(1, "Bind failed for port 2201", 24);
+        return 1;
+    }
+    if (bind(server2_fd, (struct sockaddr *)&addr2, sizeof(addr2)) < 0) {
+        write(1, "Bind failed for port 2202", 24);
+        return 1;
+    }
+
     listen(server1_fd, 1);
     listen(server2_fd, 1);
 
@@ -311,14 +329,21 @@ int main() {
         FD_ZERO(&readfds);
         FD_SET(game.p1.socket, &readfds);
         FD_SET(game.p2.socket, &readfds);
+        
         int maxfd = (game.p1.socket > game.p2.socket) ? game.p1.socket : game.p2.socket;
-        select(maxfd + 1, &readfds, NULL, NULL, NULL);
+        int activity = select(maxfd + 1, &readfds, NULL, NULL, NULL);
+
+        if (activity < 0 && errno != EINTR) {
+            write(1, "select error", 11);
+            break;
+        }
 
         if(FD_ISSET(game.p1.socket, &readfds)) {
             memset(buffer, 0, BUFFER_SIZE);
             ssize_t bytes = read(game.p1.socket, buffer, BUFFER_SIZE-1);
             if(bytes <= 0) break;
             buffer[bytes] = '\0';
+            buffer[strcspn(buffer, "\n")] = '\0';
             process_packet(&game, buffer, 1);
         }
 
@@ -327,6 +352,7 @@ int main() {
             ssize_t bytes = read(game.p2.socket, buffer, BUFFER_SIZE-1);
             if(bytes <= 0) break;
             buffer[bytes] = '\0';
+            buffer[strcspn(buffer, "\n")] = '\0';
             process_packet(&game, buffer, 0);
         }
 
