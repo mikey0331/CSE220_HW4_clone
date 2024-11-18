@@ -31,6 +31,16 @@ typedef struct {
     int current_turn;
 } GameState;
 
+const int TETRIS_PIECES[7][4][2] = {
+    {{0,0}, {0,1}, {0,2}, {0,3}},     // I
+    {{0,0}, {0,1}, {1,0}, {1,1}},     // O
+    {{0,1}, {1,0}, {1,1}, {1,2}},     // T
+    {{0,0}, {1,0}, {2,0}, {2,1}},     // J
+    {{0,0}, {1,0}, {2,0}, {2,-1}},    // L
+    {{0,0}, {0,1}, {1,-1}, {1,0}},    // S
+    {{0,-1}, {0,0}, {1,0}, {1,1}}     // Z
+};
+
 void send_error(int socket, int code) {
     char response[16];
     sprintf(response, "E %d", code);
@@ -47,6 +57,25 @@ void send_halt(int socket, int is_winner) {
     write(socket, response, strlen(response));
 }
 
+void send_shot_response(int socket, int ships_remaining, char result) {
+    char response[32];
+    sprintf(response, "R %d %c", ships_remaining, result);
+    write(socket, response, strlen(response));
+}
+
+int get_error_code(int phase, int error_type) {
+    switch(phase) {
+        case 0:
+            return error_type == 1 ? 100 : 200;
+        case 1:
+            return error_type == 1 ? 101 : (error_type == 2 ? 201 : 300 + error_type - 3);
+        case 2:
+            return error_type == 1 ? 102 : (error_type == 2 ? 202 : 400 + error_type - 3);
+        default:
+            return 100;
+    }
+}
+
 void process_packet(GameState *game, char *packet, int is_p1) {
     Player *current = is_p1 ? &game->p1 : &game->p2;
     Player *other = is_p1 ? &game->p2 : &game->p1;
@@ -55,6 +84,19 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         if(packet[0] != 'B') {
             send_error(current->socket, 100);
             return;
+        }
+        
+        if(is_p1) {
+            int width = 0, height = 0;
+            char extra[2] = {0};
+            int params = sscanf(packet + 2, "%d %d%1s", &width, &height, extra);
+            
+            if(params != 2 || width != 11 || height != 10) {
+                send_error(current->socket, 100);
+                return;
+            }
+            game->width = width;
+            game->height = height;
         }
         send_ack(current->socket);
         current->ready = 1;
@@ -66,6 +108,8 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
     if(packet[0] == 'F') {
         send_ack(current->socket);
+        send_halt(current->socket, 0);
+        send_halt(other->socket, 1);
         game->phase = 3;
         return;
     }
