@@ -80,13 +80,6 @@ void process_packet(GameState *game, char *packet, int is_p1) {
     Player *current = is_p1 ? &game->p1 : &game->p2;
     Player *other = is_p1 ? &game->p2 : &game->p1;
 
-    // Phase 0 validation
-    if(game->phase == 0 && packet[0] != 'B') {
-        send_error(current->socket, 100);
-        return;
-    }
-
-    // F packet handling
     if(packet[0] == 'F' && game->phase > 0) {
         send_halt(current->socket, 0);
         send_halt(other->socket, 1);
@@ -94,19 +87,19 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         return;
     }
 
-    // Begin packet handling
     if(game->phase == 0) {
+        if(packet[0] != 'B') {
+            send_error(current->socket, 100);
+            return;
+        }
+
         if(is_p1) {
+            int w = 0, h = 0;
             if(strncmp(packet, "B ", 2) != 0) {
                 send_error(current->socket, 200);
                 return;
             }
-            int w = 0, h = 0;
-            if(sscanf(packet + 2, "%d %d", &w, &h) != 2) {
-                send_error(current->socket, 200);
-                return;
-            }
-            if(w < 10 || h < 10) {
+            if(sscanf(packet + 2, "%d %d", &w, &h) != 2 || w < 10 || h < 10) {
                 send_error(current->socket, 200);
                 return;
             }
@@ -126,14 +119,9 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         return;
     }
 
-    // Initialize packet handling
     if(game->phase == 1) {
         if(packet[0] != 'I') {
             send_error(current->socket, 101);
-            return;
-        }
-        if(strncmp(packet, "I ", 2) != 0) {
-            send_error(current->socket, 201);
             return;
         }
 
@@ -151,7 +139,6 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             return;
         }
 
-        // Validate piece types
         for(int i = 0; i < MAX_SHIPS; i++) {
             int type = params[i * 4];
             if(type < 1 || type > 7) {
@@ -160,7 +147,6 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             }
         }
 
-        // Validate rotations
         for(int i = 0; i < MAX_SHIPS; i++) {
             int rotation = params[i * 4 + 1];
             if(rotation < 0 || rotation > 3) {
@@ -169,7 +155,6 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             }
         }
 
-        // Place pieces and check boundaries/overlaps
         int temp_board[MAX_BOARD][MAX_BOARD] = {0};
         for(int i = 0; i < MAX_SHIPS; i++) {
             int type = params[i * 4];
@@ -177,9 +162,10 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             int col = params[i * 4 + 2];
             int row = params[i * 4 + 3];
 
+            int piece_idx = type - 1;
             for(int j = 0; j < 4; j++) {
-                int new_row = TETRIS_PIECES[type-1][j][0];
-                int new_col = TETRIS_PIECES[type-1][j][1];
+                int new_row = TETRIS_PIECES[piece_idx][j][0];
+                int new_col = TETRIS_PIECES[piece_idx][j][1];
                 for(int r = 0; r < rotation; r++) {
                     int temp = new_row;
                     new_row = -new_col;
@@ -187,7 +173,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 }
                 new_row += row;
                 new_col += col;
-
+                
                 if(new_row < 0 || new_row >= game->height ||
                    new_col < 0 || new_col >= game->width) {
                     send_error(current->socket, 302);
@@ -211,13 +197,8 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         return;
     }
 
-    // Game phase handling
     if(game->phase == 2) {
         if(packet[0] == 'Q') {
-            if(strcmp(packet, "Q") != 0) {
-                send_error(current->socket, 102);
-                return;
-            }
             char response[BUFFER_SIZE] = {0};
             sprintf(response, "G %d", other->ships_remaining);
             for(int i = 0; i < game->height; i++) {
@@ -233,10 +214,6 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         }
 
         if(packet[0] == 'S') {
-            if(strncmp(packet, "S ", 2) != 0) {
-                send_error(current->socket, 202);
-                return;
-            }
             int row, col;
             if(sscanf(packet + 2, "%d %d", &row, &col) != 2) {
                 send_error(current->socket, 202);
