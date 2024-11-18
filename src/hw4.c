@@ -67,6 +67,26 @@ void send_shot_response(int socket, int ships_remaining, char result) {
     send_exact_response(socket, response);
 }
 
+int validate_board_command(const char* packet, int is_p1) {
+    if (packet[0] != 'B') return 0;
+    
+    if (is_p1) {
+        // P1 must provide dimensions
+        char *ptr = packet + 1;
+        while (*ptr == ' ') ptr++;
+        if (*ptr == '\0') return 0;
+        
+        int w, h;
+        char extra;
+        int matched = sscanf(ptr, "%d %d%c", &w, &h, &extra);
+        if (matched != 2 || w < 10 || h < 10) return 0;
+    } else {
+        // P2 must send just 'B'
+        if (strlen(packet) != 1) return 0;
+    }
+    return 1;
+}
+
 void process_packet(GameState *game, char *packet, int is_p1) {
     Player *current = is_p1 ? &game->p1 : &game->p2;
     Player *other = is_p1 ? &game->p2 : &game->p1;
@@ -84,28 +104,16 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             return;
         }
 
-        if(is_p1) {
-            char *ptr = packet + 1;
-            while(*ptr == ' ') ptr++;  // Skip leading spaces
-            
-            if(*ptr == '\0') {
-                send_error(current->socket, 200);
-                return;
-            }
+        if(!validate_board_command(packet, is_p1)) {
+            send_error(current->socket, 200);
+            return;
+        }
 
-            int w = 0, h = 0;
-            int matches = sscanf(ptr, "%d %d", &w, &h);
-            if(matches != 2 || w < 10 || h < 10) {
-                send_error(current->socket, 200);
-                return;
-            }
+        if(is_p1) {
+            int w, h;
+            sscanf(packet + 1, "%d %d", &w, &h);
             game->width = w;
             game->height = h;
-        } else {
-            if(strlen(packet) > 1) {  // Allow just 'B' for player 2
-                send_error(current->socket, 200);
-                return;
-            }
         }
 
         send_ack(current->socket);
@@ -123,18 +131,43 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             return;
         }
 
-        int params[MAX_SHIPS * 4] = {0};
+        // Count parameters
+        char *temp = strdup(packet + 1);
+        char *token = strtok(temp, " ");
         int param_count = 0;
-        char *token = strtok(packet + 1, " ");
-        
-        while(token && param_count < MAX_SHIPS * 4) {
-            params[param_count++] = atoi(token);
+        while(token) {
+            param_count++;
             token = strtok(NULL, " ");
         }
+        free(temp);
 
         if(param_count != MAX_SHIPS * 4) {
             send_error(current->socket, 201);
             return;
+        }
+
+        int params[MAX_SHIPS * 4] = {0};
+        token = strtok(packet + 1, " ");
+        for(int i = 0; i < MAX_SHIPS * 4; i++) {
+            if(!token) break;
+            params[i] = atoi(token);
+            token = strtok(NULL, " ");
+        }
+
+        for(int i = 0; i < MAX_SHIPS; i++) {
+            int type = params[i * 4];
+            if(type < 1 || type > 7) {
+                send_error(current->socket, 300);
+                return;
+            }
+        }
+
+        for(int i = 0; i < MAX_SHIPS; i++) {
+            int rotation = params[i * 4 + 1];
+            if(rotation < 0 || rotation > 3) {
+                send_error(current->socket, 301);
+                return;
+            }
         }
 
         memset(current->board, 0, sizeof(current->board));
@@ -145,16 +178,6 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             int rotation = params[i * 4 + 1];
             int col = params[i * 4 + 2];
             int row = params[i * 4 + 3];
-
-            if(type < 1 || type > 7) {
-                send_error(current->socket, 300);
-                return;
-            }
-
-            if(rotation < 0 || rotation > 3) {
-                send_error(current->socket, 301);
-                return;
-            }
 
             if(col < 0 || col >= game->width || row < 0 || row >= game->height) {
                 send_error(current->socket, 302);
@@ -226,7 +249,9 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         }
 
         int row, col;
-        if(sscanf(packet + 1, "%d %d", &row, &col) != 2) {
+        char extra;
+        int matched = sscanf(packet + 1, "%d %d%c", &row, &col, &extra);
+        if(matched != 2) {
             send_error(current->socket, 202);
             return;
         }
