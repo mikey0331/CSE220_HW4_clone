@@ -1,6 +1,4 @@
-Code
-Feedback Overview
-AutoTest
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -97,12 +95,13 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         }
 
         if(is_p1) {
-            int w = 0, h = 0;
-            int params = sscanf(packet + 1, "%d %d", &w, &h);
-            if(params != 2) {
-                send_error(current->socket, 200);
-                return;
-            }
+    int w = 0, h = 0;
+    if(strncmp(packet, "B ", 2) != 0 || 
+       sscanf(packet + 2, "%d %d", &w, &h) != 2 || 
+       w < 10 || h < 10) {
+        send_error(current->socket, 200);
+        return;
+    }
             if(w < 10 || h < 10) {
                 send_error(current->socket, 200);
                 return;
