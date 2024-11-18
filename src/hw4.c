@@ -84,24 +84,33 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             return;
         }
 
-        if(is_p1) {
-            if(strlen(packet) <= 2 || packet[1] != ' ') {
-                send_error(current->socket, 200);
-                return;
-            }
-            int w = 0, h = 0;
-            if(sscanf(packet + 2, "%d %d", &w, &h) != 2 || w < 10 || h < 10) {
-                send_error(current->socket, 200);
-                return;
-            }
-            game->width = w;
-            game->height = h;
-        } else {
-            if(strlen(packet) > 1) {
-                send_error(current->socket, 200);
-                return;
-            }
+   if(is_p1) {
+        // For bare 'B' packet
+        if(strlen(packet) == 1) {
+            send_error(current->socket, 200);
+            return;
         }
+        
+        // For malformed packets
+        if(packet[1] != ' ') {
+            send_error(current->socket, 200);
+            return;
+        }
+
+        int w = 0, h = 0;
+        int parsed = sscanf(packet + 2, "%d %d", &w, &h);
+        if(parsed != 2 || w < 10 || h < 10) {
+            send_error(current->socket, 200);
+            return;
+        }
+        game->width = w;
+        game->height = h;
+    } else {
+        if(strlen(packet) > 1) {
+            send_error(current->socket, 200);
+            return;
+        }
+    }
 
         send_ack(current->socket);
         current->ready = 1;
