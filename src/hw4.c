@@ -179,12 +179,8 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
             current->ready = 1;
             current->ships_remaining = MAX_SHIPS;
-            current->num_ships_placed = 0;
             memset(current->board, 0, sizeof(current->board));
             memset(current->shots, 0, sizeof(current->shots));
-            for (int i = 0; i < MAX_SHIPS; i++) {
-                current->ships[i].hits = 0;
-            }
             send_ack(current->socket);
             
             if (game->p1.ready && game->p2.ready) {
@@ -194,28 +190,15 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
         case 1:  // Ship placement
             if (packet[0] != 'I') {
-                send_error(current->socket, 101);
-                return;
-            }
-
-            // Count parameters
-            char *temp = strdup(packet + 1);
-            char *token = strtok(temp, " ");
-            int param_count = 0;
-            while (token) {
-                param_count++;
-                token = strtok(NULL, " ");
-            }
-            free(temp);
-
-            if (param_count != 20) {
                 send_error(current->socket, 201);
                 return;
             }
 
-            int values[20];
+            int values[20];  // 5 ships * 4 parameters each
             char *str = packet + 1;
             int count = 0;
+            
+            // Parse all parameters first
             while (*str && count < 20) {
                 while (*str == ' ') str++;
                 if (sscanf(str, "%d", &values[count]) != 1) {
@@ -225,25 +208,55 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 count++;
                 while (*str && *str != ' ') str++;
             }
+            
+            if (count != 20) {
+                send_error(current->socket, 201);
+                return;
+            }
 
-            // Validate all ships before placing any
+            // Create temporary board for validation
+            int temp_board[MAX_BOARD][MAX_BOARD];
+            memcpy(temp_board, current->board, sizeof(temp_board));
+
+            // Validate all ships
             for (int i = 0; i < MAX_SHIPS; i++) {
                 int piece_type = values[i*4];
                 int rotation = values[i*4 + 1];
                 int row = values[i*4 + 2];
                 int col = values[i*4 + 3];
-                
-                int error = validate_ship_placement(piece_type, rotation, row, col,
-                                                 game->width, game->height, current->board);
+
+                // Check for lowest error code first
+                if (piece_type < 0 || piece_type >= 7) {
+                    send_error(current->socket, 300);
+                    return;
+                }
+                if (rotation < 0 || rotation >= 4) {
+                    send_error(current->socket, 301);
+                    return;
+                }
+
+                // Check positions
+                int positions[4][2];
+                for (int j = 0; j < 4; j++) {
+                    positions[j][0] = row + TETRIS_PIECES[piece_type][j][0];
+                    positions[j][1] = col + TETRIS_PIECES[piece_type][j][1];
+                }
+
+                int error = check_ship_positions(positions, game->width, game->height, temp_board);
                 if (error) {
                     send_error(current->socket, error);
                     return;
                 }
+
+                // Mark positions in temporary board
+                for (int j = 0; j < 4; j++) {
+                    temp_board[positions[j][0]][positions[j][1]] = 1;
+                }
             }
 
-            // Place all ships
+            // If all validations pass, place ships on real board
             for (int i = 0; i < MAX_SHIPS; i++) {
-                place_ship(current, values[i*4], values[i*4 + 2], values[i*4 + 3], i);
+                place_ship(current, values[i*4], values[i*4 + 2], values[i*4 + 3]);
             }
 
             current->ready = 2;
@@ -400,7 +413,6 @@ int main() {
         if (game.phase == 3) break;
     }
 
-    // Cleanup
     close(game.p1.socket);
     close(game.p2.socket);
     close(server1_fd);
