@@ -1,3 +1,6 @@
+Code
+Feedback Overview
+AutoTest
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,7 +10,6 @@
 #include <sys/select.h>
 #include <errno.h>
 #include <netinet/in.h>
-#include <stdbool.h>
 
 #define PORT1 2201
 #define PORT2 2202
@@ -33,13 +35,13 @@ typedef struct {
 } GameState;
 
 const int TETRIS_PIECES[7][4][2] = {
-    {{0,0},{0,1},{0,2},{0,3}}, //I
-    {{0,0},{0,1},{1,0},{1,1}}, //O
-    {{0,1},{1,0},{1,1},{1,2}}, //T
-    {{0,0},{1,0},{2,0},{2,1}}, //J
-    {{0,0},{1,0},{2,0},{2,-1}}, //L
-    {{0,0},{0,1},{1,-1},{1,0}}, //S
-    {{0,-1},{0,0},{1,0},{1,1}}  //Z
+    {{0,0}, {0,1}, {0,2}, {0,3}},     // I
+    {{0,0}, {0,1}, {1,0}, {1,1}},     // O
+    {{0,1}, {1,0}, {1,1}, {1,2}},     // T
+    {{0,0}, {1,0}, {2,0}, {2,1}},     // J
+    {{0,0}, {1,0}, {2,0}, {2,-1}},    // L
+    {{0,0}, {0,1}, {1,-1}, {1,0}},    // S
+    {{0,-1}, {0,0}, {1,0}, {1,1}}     // Z
 };
 
 void send_error(int socket, int code) {
@@ -64,16 +66,24 @@ void send_shot_response(int socket, int ships_remaining, char result) {
     write(socket, response, strlen(response));
 }
 
+int get_error_code(int phase, int error_type) {
+    switch(phase) {
+        case 0:
+            return error_type == 1 ? 100 : 200;
+        case 1:
+            return error_type == 1 ? 101 : (error_type == 2 ? 201 : 300 + error_type - 3);
+        case 2:
+            return error_type == 1 ? 102 : (error_type == 2 ? 202 : 400 + error_type - 3);
+        default:
+            return 100;
+    }
+}
+
 void process_packet(GameState *game, char *packet, int is_p1) {
     Player *current = is_p1 ? &game->p1 : &game->p2;
     Player *other = is_p1 ? &game->p2 : &game->p1;
 
-    if(game->phase == 0 && packet[0] != 'B') {
-        send_error(current->socket, 100);
-        return;
-    }
-
-    if(packet[0] == 'F' && game->phase > 0) {
+    if(packet[0] == 'F') {
         send_halt(current->socket, 0);
         send_halt(other->socket, 1);
         game->phase = 3;
@@ -81,18 +91,26 @@ void process_packet(GameState *game, char *packet, int is_p1) {
     }
 
     if(game->phase == 0) {
+        if(packet[0] != 'B') {
+            send_error(current->socket, 100);
+            return;
+        }
+
         if(is_p1) {
             int w = 0, h = 0;
-            if(strncmp(packet, "B ", 2) != 0 || 
-               sscanf(packet + 2, "%d %d", &w, &h) != 2 || 
-               w < 10 || h < 10) {
+            int params = sscanf(packet + 1, "%d %d", &w, &h);
+            if(params != 2) {
+                send_error(current->socket, 200);
+                return;
+            }
+            if(w < 10 || h < 10) {
                 send_error(current->socket, 200);
                 return;
             }
             game->width = w;
             game->height = h;
         } else {
-            if(strcmp(packet, "B") != 0) {
+            if(strlen(packet) > 1) {
                 send_error(current->socket, 200);
                 return;
             }
@@ -114,7 +132,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
         int params[MAX_SHIPS * 4];
         int param_count = 0;
-        char *token = strtok(packet + 2, " ");
+        char *token = strtok(packet + 1, " ");
         
         while(token && param_count < MAX_SHIPS * 4) {
             params[param_count++] = atoi(token);
@@ -126,6 +144,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             return;
         }
 
+        // Check all piece types first
         for(int i = 0; i < MAX_SHIPS; i++) {
             int type = params[i * 4];
             if(type < 1 || type > 7) {
@@ -134,6 +153,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             }
         }
 
+        // Then check all rotations
         for(int i = 0; i < MAX_SHIPS; i++) {
             int rotation = params[i * 4 + 1];
             if(rotation < 0 || rotation > 3) {
@@ -143,30 +163,29 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         }
 
         int temp_board[MAX_BOARD][MAX_BOARD] = {0};
+        
+        // Check boundaries and overlaps
         for(int i = 0; i < MAX_SHIPS; i++) {
             int type = params[i * 4];
             int rotation = params[i * 4 + 1];
             int col = params[i * 4 + 2];
             int row = params[i * 4 + 3];
 
-            if(row < 0 || row >= game->height || col < 0 || col >= game->width) {
-                send_error(current->socket, 302);
-                return;
-            }
-
             int piece_idx = type - 1;
             for(int j = 0; j < 4; j++) {
                 int new_row = TETRIS_PIECES[piece_idx][j][0];
                 int new_col = TETRIS_PIECES[piece_idx][j][1];
+                
                 for(int r = 0; r < rotation; r++) {
                     int temp = new_row;
                     new_row = -new_col;
                     new_col = temp;
                 }
+                
                 new_row += row;
                 new_col += col;
                 
-                if(new_row < 0 || new_row >= game->height ||
+                if(new_row < 0 || new_row >= game->height || 
                    new_col < 0 || new_col >= game->width) {
                     send_error(current->socket, 302);
                     return;
@@ -190,6 +209,11 @@ void process_packet(GameState *game, char *packet, int is_p1) {
     }
 
     if(game->phase == 2) {
+        if(packet[0] != 'S' && packet[0] != 'Q') {
+            send_error(current->socket, 102);
+            return;
+        }
+
         if(packet[0] == 'Q') {
             char response[BUFFER_SIZE] = {0};
             sprintf(response, "G %d", other->ships_remaining);
@@ -205,37 +229,34 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             return;
         }
 
-        if(packet[0] == 'S') {
-            int row, col;
-            if(sscanf(packet + 2, "%d %d", &row, &col) != 2) {
-                send_error(current->socket, 202);
-                return;
-            }
-            if(row < 0 || row >= game->height || col < 0 || col >= game->width) {
-                send_error(current->socket, 400);
-                return;
-            }
-            if(current->shots[row][col]) {
-                send_error(current->socket, 401);
-                return;
-            }
-
-            current->shots[row][col] = 1;
-            if(other->board[row][col]) {
-                other->ships_remaining--;
-                send_shot_response(current->socket, other->ships_remaining, 'H');
-                if(other->ships_remaining == 0) {
-                    send_halt(other->socket, 0);
-                    send_halt(current->socket, 1);
-                    game->phase = 3;
-                }
-            } else {
-                send_shot_response(current->socket, other->ships_remaining, 'M');
-            }
+        int row, col;
+        if(sscanf(packet + 1, "%d %d", &row, &col) != 2) {
+            send_error(current->socket, 202);
+            return;
+        }
+        
+        if(row < 0 || row >= game->height || col < 0 || col >= game->width) {
+            send_error(current->socket, 400);
+            return;
+        }
+        
+        if(current->shots[row][col]) {
+            send_error(current->socket, 401);
             return;
         }
 
-        send_error(current->socket, 102);
+        current->shots[row][col] = 1;
+        if(other->board[row][col]) {
+            other->ships_remaining--;
+            send_shot_response(current->socket, other->ships_remaining, 'H');
+            if(other->ships_remaining == 0) {
+                send_halt(other->socket, 0);
+                send_halt(current->socket, 1);
+                game->phase = 3;
+            }
+        } else {
+            send_shot_response(current->socket, other->ships_remaining, 'M');
+        }
         return;
     }
 }
@@ -259,8 +280,8 @@ int main() {
     addr2.sin_addr.s_addr = INADDR_ANY;
     addr2.sin_port = htons(PORT2);
 
-    bind(server1_fd, (struct sockaddr*)&addr1, sizeof(addr1));
-    bind(server2_fd, (struct sockaddr*)&addr2, sizeof(addr2));
+    bind(server1_fd, (struct sockaddr *)&addr1, sizeof(addr1));
+    bind(server2_fd, (struct sockaddr *)&addr2, sizeof(addr2));
     listen(server1_fd, 1);
     listen(server2_fd, 1);
 
