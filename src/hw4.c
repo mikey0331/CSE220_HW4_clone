@@ -93,19 +93,20 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             return;
         }
 
-        if(is_p1) {
-            int w = 0, h = 0;
-            int params = sscanf(packet + 1, "%d %d", &w, &h);
-            if(params != 2) {
-                send_error(current->socket, 200);
-                return;
-            }
-            if(w < 10 || h < 10) {
-                send_error(current->socket, 200);
-                return;
-            }
-            game->width = w;
-            game->height = h;
+if(is_p1) {
+    int w = 0, h = 0;
+    int params = sscanf(packet + 1, "%d %d", &w, &h);
+    if(params != 2) {
+        send_error(current->socket, 200);
+        return;
+    }
+    if(w < 10 || h < 10) {
+        send_error(current->socket, 200);
+        return;
+    }
+    game->width = w;   // width should be 11
+    game->height = h;  // height should be 10
+}
         } else {
             if(strlen(packet) > 1) {
                 send_error(current->socket, 200);
