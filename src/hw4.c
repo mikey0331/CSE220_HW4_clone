@@ -91,6 +91,10 @@ int validate_board_command(const char* packet, int is_p1) {
     return 1;
 }
 
+int validate_piece_type(int type) {
+    return (type >= 1 && type <= 7);
+}
+
 void process_packet(GameState *game, char *packet, int is_p1) {
     Player *current = is_p1 ? &game->p1 : &game->p2;
     Player *other = is_p1 ? &game->p2 : &game->p1;
@@ -156,7 +160,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             // Validate piece types first
             for (int i = 0; i < MAX_SHIPS; i++) {
                 int type = params[i * 4];
-                if (type < 1 || type > 7) {
+                if (!validate_piece_type(params[i * 4])) {
                     send_error(current->socket, 300);
                     return;
                 }
