@@ -160,7 +160,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             // Validate piece types first
             for (int i = 0; i < MAX_SHIPS; i++) {
                 int type = params[i * 4];
-                if (!validate_piece_type(params[i * 4])) {
+                if (type < 1 || type > 7) {
                     send_error(current->socket, 300);
                     return;
                 }
@@ -168,21 +168,21 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
             // Clear board and initialize ships
             memset(current->board, 0, sizeof(current->board));
-            current->ships_remaining = 20;  // 5 ships * 4 pieces each
+            current->ships_remaining = 20;  // 5 ships * 4 pieces
 
             // Place ships
             for (int i = 0; i < MAX_SHIPS; i++) {
                 int type = params[i * 4] - 1;
                 int rotation = params[i * 4 + 1];
-                int col = params[i * 4 + 2];
-                int row = params[i * 4 + 3];
-
+                
                 if (rotation < 0 || rotation > 3) {
                     send_error(current->socket, 301);
                     return;
                 }
 
-                // Calculate positions for this ship
+                int col = params[i * 4 + 2];
+                int row = params[i * 4 + 3];
+
                 int positions[4][2];
                 for (int j = 0; j < 4; j++) {
                     int piece_row = TETRIS_PIECES[type][j][0];
@@ -211,7 +211,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                     }
                 }
 
-                // Place the ship
+                // Place ship
                 for (int j = 0; j < 4; j++) {
                     current->board[positions[j][0]][positions[j][1]] = 1;
                 }
@@ -234,8 +234,8 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 }
 
                 int row, col;
-                char extra;
-                int matched = sscanf(packet + 1, "%d %d%c", &row, &col, &extra);
+                char extra[32];
+                int matched = sscanf(packet + 1, "%d %d%[^\n]", &row, &col, extra);
                 
                 if (matched != 2) {
                     send_error(current->socket, 202);
@@ -257,8 +257,8 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                     other->ships_remaining--;
                     send_shot_response(current->socket, other->ships_remaining, 'H');
                     if (other->ships_remaining == 0) {
-                        send_halt(other->socket, 0);
-                        send_halt(current->socket, 1);
+                        send_halt(other->socket, 0);  // Tell loser first
+                        send_halt(current->socket, 1); // Then tell winner
                         game->phase = 3;
                     }
                 } else {
@@ -285,7 +285,6 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             break;
     }
 }
-
 int main() {
     int server1_fd, server2_fd;
     struct sockaddr_in addr1, addr2;
