@@ -85,7 +85,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         }
 
         if(is_p1) {
-            if(packet[1] != ' ') {
+            if(strlen(packet) <= 2 || packet[1] != ' ') {
                 send_error(current->socket, 200);
                 return;
             }
@@ -138,6 +138,9 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 send_error(current->socket, 300);
                 return;
             }
+        }
+
+        for(int i = 0; i < MAX_SHIPS; i++) {
             int rotation = params[i * 4 + 1];
             if(rotation < 0 || rotation > 3) {
                 send_error(current->socket, 301);
@@ -188,17 +191,18 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
         if(game->p1.ready == 2 && game->p2.ready == 2) {
             game->phase = 2;
+            game->current_turn = 1;
         }
         return;
     }
 
     if(game->phase == 2) {
-        if ((is_p1 && game->current_turn != 1) || (!is_p1 && game->current_turn != 2)) {
+        if(packet[0] != 'S' && packet[0] != 'Q') {
             send_error(current->socket, 102);
             return;
         }
 
-        if(packet[0] != 'S' && packet[0] != 'Q') {
+        if((is_p1 && game->current_turn != 1) || (!is_p1 && game->current_turn != 2)) {
             send_error(current->socket, 102);
             return;
         }
@@ -252,6 +256,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         return;
     }
 }
+
 
 int main() {
     GameState game = {0};
