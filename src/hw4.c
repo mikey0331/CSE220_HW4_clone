@@ -144,18 +144,23 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             return;
         }
 
-        if(is_p1) {
-            int w = 0, h = 0;
-            if(sscanf(packet + 2, "%d %d", &w, &h) != 2 || w < 10 || h < 10) {
-                send_error(current->socket, 200);
-                return;
-            }
-            game->width = w;
-            game->height = h;
-        } else if(strlen(packet) > 1) {
-            send_error(current->socket, 200);
-            return;
-        }
+if(is_p1) {
+    int w = 0, h = 0;
+    if(strncmp(packet, "B ", 2) != 0 || 
+       sscanf(packet + 2, "%d %d", &w, &h) != 2 || 
+       w < 10 || h < 10 || 
+       w > MAX_BOARD_SIZE || h > MAX_BOARD_SIZE) {
+        send_error(current->socket, 200);
+        return;
+    }
+    game->width = w;
+    game->height = h;
+} else {
+    if(strcmp(packet, "B") != 0) {
+        send_error(current->socket, 200);
+        return;
+    }
+}
 
         send_ack(current->socket);
         current->ready = 1;
