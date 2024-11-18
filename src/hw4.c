@@ -232,6 +232,13 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             send_error(current->socket, 102);
             return;
         }
+            if(packet[0] == 'S') {
+        int row, col;
+        if(sscanf(packet + 1, "%d %d", &row, &col) != 2) {
+            send_error(current->socket, 202);
+            return;
+        }}
+
 
         if(packet[0] == 'Q') {
             char response[BUFFER_SIZE] = {0};
