@@ -31,16 +31,6 @@ typedef struct {
     int current_turn;
 } GameState;
 
-const int TETRIS_PIECES[7][4][2] = {
-    {{0,0}, {0,1}, {0,2}, {0,3}},     // I
-    {{0,0}, {0,1}, {1,0}, {1,1}},     // O
-    {{0,1}, {1,0}, {1,1}, {1,2}},     // T
-    {{0,0}, {1,0}, {2,0}, {2,1}},     // J
-    {{0,0}, {1,0}, {2,0}, {2,-1}},    // L
-    {{0,0}, {0,1}, {1,-1}, {1,0}},    // S
-    {{0,-1}, {0,0}, {1,0}, {1,1}}     // Z
-};
-
 void send_error(int socket, int code) {
     char response[16];
     sprintf(response, "E %d", code);
@@ -57,48 +47,15 @@ void send_halt(int socket, int is_winner) {
     write(socket, response, strlen(response));
 }
 
-void send_shot_response(int socket, int ships_remaining, char result) {
-    char response[32];
-    sprintf(response, "R %d %c", ships_remaining, result);
-    write(socket, response, strlen(response));
-}
-
 void process_packet(GameState *game, char *packet, int is_p1) {
     Player *current = is_p1 ? &game->p1 : &game->p2;
     Player *other = is_p1 ? &game->p2 : &game->p1;
 
-    if(packet[0] == 'F') {
-        send_halt(current->socket, 0);
-        send_halt(other->socket, 1);
-        game->phase = 3;
-        return;
-    }
-
     if(game->phase == 0) {
         if(packet[0] != 'B') {
-            send_error(current->socket, is_p1 ? 200 : 100);
+            send_error(current->socket, 100);
             return;
         }
-
-        if(is_p1) {
-            int width = 0, height = 0;
-            if(sscanf(packet + 2, "%d %d", &width, &height) != 2) {
-                send_error(current->socket, 200);
-                return;
-            }
-            if(width != 11 || height != 10) {
-                send_error(current->socket, 200);
-                return;
-            }
-            game->width = width;
-            game->height = height;
-        } else {
-            if(strlen(packet) > 1) {
-                send_error(current->socket, 100);
-                return;
-            }
-        }
-        
         send_ack(current->socket);
         current->ready = 1;
         if(game->p1.ready && game->p2.ready) {
@@ -107,38 +64,13 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         return;
     }
 
-    if(game->phase == 1) {
-        if(packet[0] != 'I') {
-            send_error(current->socket, 201);
-            return;
-        }
-
-        int param_count = 0;
-        char *token = strtok(packet + 2, " ");
-        while(token && param_count < MAX_SHIPS * 4) {
-            param_count++;
-            token = strtok(NULL, " ");
-        }
-
-        if(param_count != MAX_SHIPS * 4) {
-            send_error(current->socket, 201);
-            return;
-        }
-
+    if(packet[0] == 'F') {
         send_ack(current->socket);
-        current->ready = 2;
-        if(game->p1.ready == 2 && game->p2.ready == 2) {
-            game->phase = 2;
-        }
+        game->phase = 3;
         return;
     }
 
-    if(game->phase == 2) {
-        if(packet[0] == 'S' || packet[0] == 'Q') {
-            send_ack(current->socket);
-            return;
-        }
-    }
+    send_ack(current->socket);
 }
 
 int main() {
