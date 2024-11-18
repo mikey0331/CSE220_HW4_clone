@@ -67,55 +67,69 @@ void send_shot_response(int socket, int ships_remaining, char result) {
     write(socket, response, strlen(response));
 }
 
+int validate_begin_packet(const char* packet, int* width, int* height) {
+    // Check if packet is just "B"
+    if (strlen(packet) == 1) {
+        return 0;
+    }
+    
+    // Check if second character is a space
+    if (packet[1] != ' ') {
+        return 0;
+    }
+    
+    // Count number of parameters
+    int params = 0;
+    int w = 0, h = 0;
+    char extra;
+    int result = sscanf(packet + 2, "%d %d%c", &w, &h, &extra);
+    
+    // Check if exactly two numbers were read
+    if (result != 2) {
+        return 0;
+    }
+    
+    // Check if numbers are in valid range
+    if (w < 10 || h < 10 || w > MAX_BOARD || h > MAX_BOARD) {
+        return 0;
+    }
+    
+    *width = w;
+    *height = h;
+    return 1;
+}
+
 void process_packet(GameState *game, char *packet, int is_p1) {
     Player *current = is_p1 ? &game->p1 : &game->p2;
     Player *other = is_p1 ? &game->p2 : &game->p1;
 
-    if(packet[0] == 'F') {
-        send_halt(current->socket, 0);
-        send_halt(other->socket, 1);
-        game->phase = 3;
+    // Handle invalid packet type first
+    if (game->phase == 0 && packet[0] != 'B') {
+        send_error(current->socket, 100);
         return;
     }
 
-    if(game->phase == 0) {
-        if(packet[0] != 'B') {
-            send_error(current->socket, 100);
-            return;
+    if (game->phase == 0) {
+        if (is_p1) {
+            int width, height;
+            if (!validate_begin_packet(packet, &width, &height)) {
+                send_error(current->socket, 200);
+                return;
+            }
+            game->width = width;
+            game->height = height;
+        } else {
+            // Player 2 should only send "B"
+            if (strlen(packet) > 1) {
+                send_error(current->socket, 200);
+                return;
+            }
         }
-
-   if(is_p1) {
-        // For bare 'B' packet
-        if(strlen(packet) == 1) {
-            send_error(current->socket, 200);
-            return;
-        }
-        
-        // For malformed packets
-        if(packet[1] != ' ') {
-            send_error(current->socket, 200);
-            return;
-        }
-
-        int w = 0, h = 0;
-        int parsed = sscanf(packet + 2, "%d %d", &w, &h);
-        if(parsed != 2 || w < 10 || h < 10) {
-            send_error(current->socket, 200);
-            return;
-        }
-        game->width = w;
-        game->height = h;
-    } else {
-        if(strlen(packet) > 1) {
-            send_error(current->socket, 200);
-            return;
-        }
-    }
 
         send_ack(current->socket);
         current->ready = 1;
 
-        if(game->p1.ready && game->p2.ready) {
+        if (game->p1.ready && game->p2.ready) {
             game->phase = 1;
         }
         return;
