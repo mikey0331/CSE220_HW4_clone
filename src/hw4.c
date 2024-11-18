@@ -42,19 +42,17 @@ const int TETRIS_PIECES[7][4][2] = {
 };
 
 void send_exact_response(int socket, const char *msg) {
-    if (send(socket, msg, strlen(msg), 0) != strlen(msg)) {
-        perror("send failed");
-    }
+    write(socket, msg, strlen(msg));
 }
 
 void send_error(int socket, int code) {
     char response[16];
     sprintf(response, "E %d", code);
-     write(socket, response, strlen(response));
+    write(socket, response, strlen(response));
 }
 
 void send_ack(int socket) {
-    send_exact_response(socket, "A");
+    write(socket, "A", 1);
 }
 
 void send_halt(int socket, int is_winner) {
@@ -73,7 +71,6 @@ void process_packet(GameState *game, char *packet, int is_p1) {
     Player *current = is_p1 ? &game->p1 : &game->p2;
     Player *other = is_p1 ? &game->p2 : &game->p1;
 
-    // Forfeit handling
     if(packet[0] == 'F') {
         send_halt(current->socket, 0);
         send_halt(other->socket, 1);
@@ -81,38 +78,25 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         return;
     }
 
-    // Begin (Board Setup) Phase
     if(game->phase == 0) {
-        // Handle multiple variations of B packet
         if(packet[0] != 'B') {
             send_error(current->socket, 100);
             return;
         }
 
-        // For player 1: require valid board dimensions
         if(is_p1) {
+            if(packet[1] != ' ') {
+                send_error(current->socket, 200);
+                return;
+            }
             int w = 0, h = 0;
-            int parsed = 0;
-
-            // Handle different B packet formats
-            if(strlen(packet) == 1) {
+            if(sscanf(packet + 2, "%d %d", &w, &h) != 2 || w < 10 || h < 10) {
                 send_error(current->socket, 200);
                 return;
             }
-
-            // Try parsing as standard board size
-            parsed = sscanf(packet + 2, "%d %d", &w, &h);
-            
-            // Validate board size
-            if(parsed != 2 || w < 10 || h < 10) {
-                send_error(current->socket, 200);
-                return;
-            }
-
             game->width = w;
             game->height = h;
         } else {
-            // Player 2 must send minimal B packet
             if(strlen(packet) > 1) {
                 send_error(current->socket, 200);
                 return;
@@ -128,7 +112,6 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         return;
     }
 
-    // Initialize (Ship Placement) Phase
     if(game->phase == 1) {
         if(packet[0] != 'I') {
             send_error(current->socket, 101);
@@ -139,29 +122,22 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         int param_count = 0;
         char *token = strtok(packet + 1, " ");
         
-        // Parse parameters
         while(token && param_count < MAX_SHIPS * 4) {
             params[param_count++] = atoi(token);
             token = strtok(NULL, " ");
         }
 
-        // Validate parameter count
         if(param_count != MAX_SHIPS * 4) {
             send_error(current->socket, 201);
             return;
         }
 
-        // Validate piece types
         for(int i = 0; i < MAX_SHIPS; i++) {
             int type = params[i * 4];
             if(type < 1 || type > 7) {
                 send_error(current->socket, 300);
                 return;
             }
-        }
-
-        // Validate rotations
-        for(int i = 0; i < MAX_SHIPS; i++) {
             int rotation = params[i * 4 + 1];
             if(rotation < 0 || rotation > 3) {
                 send_error(current->socket, 301);
@@ -171,7 +147,6 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
         int temp_board[MAX_BOARD][MAX_BOARD] = {0};
         
-        // Validate ship placements
         for(int i = 0; i < MAX_SHIPS; i++) {
             int type = params[i * 4];
             int rotation = params[i * 4 + 1];
@@ -183,7 +158,6 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 int new_row = TETRIS_PIECES[piece_idx][j][0];
                 int new_col = TETRIS_PIECES[piece_idx][j][1];
                 
-                // Handle rotation
                 for(int r = 0; r < rotation; r++) {
                     int temp = new_row;
                     new_row = -new_col;
@@ -193,14 +167,12 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 new_row += row;
                 new_col += col;
 
-                // Validate board boundaries
-                if(new_row < 0 || new_row >= game->height ||
-                   new_col < 0 || new_col >= game->width) {
+                if(new_col < 0 || new_col >= game->width ||
+                   new_row < 0 || new_row >= game->height) {
                     send_error(current->socket, 302);
                     return;
                 }
 
-                // Check for ship overlaps
                 if(temp_board[new_row][new_col]) {
                     send_error(current->socket, 303);
                     return;
@@ -220,19 +192,20 @@ void process_packet(GameState *game, char *packet, int is_p1) {
         return;
     }
 
-    // Shooting Phase
     if(game->phase == 2) {
+        if ((is_p1 && game->current_turn != 1) || (!is_p1 && game->current_turn != 2)) {
+            send_error(current->socket, 102);
+            return;
+        }
+
         if(packet[0] != 'S' && packet[0] != 'Q') {
             send_error(current->socket, 102);
             return;
         }
 
-        // Query handling
-        char response[BUFFER_SIZE] = {0};
         if(packet[0] == 'Q') {
-            
+            char response[BUFFER_SIZE] = {0};
             sprintf(response, "G %d", other->ships_remaining);
-            
             for(int i = 0; i < game->height; i++) {
                 for(int j = 0; j < game->width; j++) {
                     if(current->shots[i][j]) {
@@ -245,20 +218,17 @@ void process_packet(GameState *game, char *packet, int is_p1) {
             return;
         }
 
-        // Shot validation
         int row, col;
         if(sscanf(packet + 1, "%d %d", &row, &col) != 2) {
             send_error(current->socket, 202);
             return;
         }
 
-        // Validate shot coordinates
-        if(row < 0 || row >= game->height || col < 0 || col >= game->width) {
+        if(col < 0 || col >= game->width || row < 0 || row >= game->height) {
             send_error(current->socket, 400);
             return;
         }
 
-        // Prevent repeated shots
         if(current->shots[row][col]) {
             send_error(current->socket, 401);
             return;
@@ -266,20 +236,19 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
         current->shots[row][col] = 1;
         
-        // Hit or miss logic
         if(other->board[row][col]) {
             other->ships_remaining--;
             send_shot_response(current->socket, other->ships_remaining, 'H');
-            
-            // Check for game end
             if(other->ships_remaining == 0) {
                 send_halt(other->socket, 0);
                 send_halt(current->socket, 1);
                 game->phase = 3;
+                return;
             }
         } else {
             send_shot_response(current->socket, other->ships_remaining, 'M');
         }
+        game->current_turn = is_p1 ? 2 : 1;
         return;
     }
 }
@@ -288,11 +257,12 @@ int main() {
     GameState game = {0};
     game.phase = 0;
     game.current_turn = 1;
+    memset(&game.p1, 0, sizeof(Player));
+    memset(&game.p2, 0, sizeof(Player));
 
     int server1_fd = socket(AF_INET, SOCK_STREAM, 0);
     int server2_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server1_fd < 0 || server2_fd < 0) {
-        write(1, "Socket creation failed", 20);
         return 1;
     }
 
@@ -308,12 +278,8 @@ int main() {
     addr2.sin_addr.s_addr = INADDR_ANY;
     addr2.sin_port = htons(PORT2);
 
-    if (bind(server1_fd, (struct sockaddr *)&addr1, sizeof(addr1)) < 0) {
-        write(1, "Bind failed for port 2201", 24);
-        return 1;
-    }
-    if (bind(server2_fd, (struct sockaddr *)&addr2, sizeof(addr2)) < 0) {
-        write(1, "Bind failed for port 2202", 24);
+    if (bind(server1_fd, (struct sockaddr *)&addr1, sizeof(addr1)) < 0 ||
+        bind(server2_fd, (struct sockaddr *)&addr2, sizeof(addr2)) < 0) {
         return 1;
     }
 
@@ -335,7 +301,6 @@ int main() {
         int activity = select(maxfd + 1, &readfds, NULL, NULL, NULL);
 
         if (activity < 0 && errno != EINTR) {
-            write(1, "select error", 11);
             break;
         }
 
