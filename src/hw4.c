@@ -16,8 +16,8 @@
 #define SHIP_SIZE 4
 
 typedef struct {
-    int cells[SHIP_SIZE][2];  // Coordinates for each cell of the ship
-    int hits;                 // Number of hits on this ship
+    int cells[SHIP_SIZE][2];
+    int hits;
 } Ship;
 
 typedef struct {
@@ -27,6 +27,7 @@ typedef struct {
     int shots[MAX_BOARD][MAX_BOARD];
     Ship ships[MAX_SHIPS];
     int ships_remaining;
+    int num_ships_placed;
 } Player;
 
 typedef struct {
@@ -95,14 +96,11 @@ int validate_board_command(const char* packet, int is_p1) {
     return 1;
 }
 
-// Returns lowest error code if invalid, 0 if valid
-int check_ship_params(int piece_type, int rotation, int col, int row, 
-                     int width, int height, int board[MAX_BOARD][MAX_BOARD]) {
-    // Check piece type first (lowest error code)
+int validate_ship_placement(int piece_type, int rotation, int row, int col,
+                          int width, int height, int board[MAX_BOARD][MAX_BOARD]) {
     if (piece_type < 0 || piece_type >= 7) return 300;
     if (rotation < 0 || rotation >= 4) return 301;
 
-    // Check boundaries
     for (int i = 0; i < 4; i++) {
         int new_row = row + TETRIS_PIECES[piece_type][i][0];
         int new_col = col + TETRIS_PIECES[piece_type][i][1];
@@ -118,9 +116,7 @@ int check_ship_params(int piece_type, int rotation, int col, int row,
     return 0;
 }
 
-void place_ship(Player *player, int ship_index, int piece_type, int row, int col) {
-    player->ships[ship_index].hits = 0;
-    
+void place_ship(Player *player, int piece_type, int row, int col, int ship_index) {
     for (int i = 0; i < 4; i++) {
         int new_row = row + TETRIS_PIECES[piece_type][i][0];
         int new_col = col + TETRIS_PIECES[piece_type][i][1];
@@ -129,12 +125,14 @@ void place_ship(Player *player, int ship_index, int piece_type, int row, int col
         player->ships[ship_index].cells[i][0] = new_row;
         player->ships[ship_index].cells[i][1] = new_col;
     }
+    player->ships[ship_index].hits = 0;
+    player->num_ships_placed++;
 }
 
 void process_shot(Player *shooter, Player *target, int row, int col) {
     shooter->shots[row][col] = 1;
+    
     if (target->board[row][col]) {
-        // Find which ship was hit and increment its hit count
         for (int s = 0; s < MAX_SHIPS; s++) {
             for (int c = 0; c < SHIP_SIZE; c++) {
                 if (target->ships[s].cells[c][0] == row && 
@@ -143,7 +141,7 @@ void process_shot(Player *shooter, Player *target, int row, int col) {
                     if (target->ships[s].hits == SHIP_SIZE) {
                         target->ships_remaining--;
                     }
-                    break;
+                    return;
                 }
             }
         }
@@ -181,6 +179,9 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
             current->ready = 1;
             current->ships_remaining = MAX_SHIPS;
+            current->num_ships_placed = 0;
+            memset(current->board, 0, sizeof(current->board));
+            memset(current->shots, 0, sizeof(current->shots));
             for (int i = 0; i < MAX_SHIPS; i++) {
                 current->ships[i].hits = 0;
             }
@@ -197,11 +198,24 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 return;
             }
 
-            int values[20];  // 5 ships * 4 parameters each
+            // Count parameters
+            char *temp = strdup(packet + 1);
+            char *token = strtok(temp, " ");
+            int param_count = 0;
+            while (token) {
+                param_count++;
+                token = strtok(NULL, " ");
+            }
+            free(temp);
+
+            if (param_count != 20) {
+                send_error(current->socket, 201);
+                return;
+            }
+
+            int values[20];
             char *str = packet + 1;
             int count = 0;
-            
-            // Parse all parameters first
             while (*str && count < 20) {
                 while (*str == ' ') str++;
                 if (sscanf(str, "%d", &values[count]) != 1) {
@@ -211,21 +225,16 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 count++;
                 while (*str && *str != ' ') str++;
             }
-            
-            if (count != 20) {
-                send_error(current->socket, 201);
-                return;
-            }
 
             // Validate all ships before placing any
             for (int i = 0; i < MAX_SHIPS; i++) {
-                int error = check_ship_params(
-                    values[i*4],     // piece_type
-                    values[i*4 + 1], // rotation
-                    values[i*4 + 3], // col
-                    values[i*4 + 2], // row
-                    game->width, game->height, current->board
-                );
+                int piece_type = values[i*4];
+                int rotation = values[i*4 + 1];
+                int row = values[i*4 + 2];
+                int col = values[i*4 + 3];
+                
+                int error = validate_ship_placement(piece_type, rotation, row, col,
+                                                 game->width, game->height, current->board);
                 if (error) {
                     send_error(current->socket, error);
                     return;
@@ -234,7 +243,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
             // Place all ships
             for (int i = 0; i < MAX_SHIPS; i++) {
-                place_ship(current, i, values[i*4], values[i*4 + 2], values[i*4 + 3]);
+                place_ship(current, values[i*4], values[i*4 + 2], values[i*4 + 3], i);
             }
 
             current->ready = 2;
@@ -272,9 +281,10 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                     return;
                 }
 
+                int was_hit = other->board[row][col];
                 process_shot(current, other, row, col);
                 
-                if (other->board[row][col]) {
+                if (was_hit) {
                     send_shot_response(current->socket, other->ships_remaining, 'H');
                     if (other->ships_remaining == 0) {
                         send_halt(other->socket, 0);
@@ -355,11 +365,6 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    memset(game.p1.board, 0, sizeof(game.p1.board));
-    memset(game.p1.shots, 0, sizeof(game.p1.shots));
-    memset(game.p2.board, 0, sizeof(game.p2.board));
-    memset(game.p2.shots, 0, sizeof(game.p2.shots));
-
     char buffer[BUFFER_SIZE];
     fd_set readfds;
 
@@ -382,6 +387,7 @@ int main() {
             buffer[strcspn(buffer, "\n")] = '\0';
             process_packet(&game, buffer, 1);
         }
+
         if (FD_ISSET(game.p2.socket, &readfds)) {
             memset(buffer, 0, BUFFER_SIZE);
             ssize_t bytes = read(game.p2.socket, buffer, BUFFER_SIZE-1);
