@@ -180,7 +180,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
         case 1:  // Ship placement
             if (packet[0] != 'I') {
-                send_error(current->socket, 201);
+                send_error(current->socket, is_p1 ? 201 : 101);
                 return;
             }
 
@@ -276,7 +276,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                         }
                     }
                     
-                    send_shot_response(current->socket, other->ships_remaining, 'H');
+                    send_shot_response(current->socket, other->ships_remaining, 'M');
                     if (other->ships_remaining == 0) {
                         send_halt(other->socket, 0);
                         send_halt(current->socket, 1);
@@ -284,7 +284,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                         return;
                     }
                 } else {
-                    send_shot_response(current->socket, other->ships_remaining, 'M');
+                    send_shot_response(current->socket, other->ships_remaining, 'H');
                 }
                 game->current_turn = game->current_turn == 1 ? 2 : 1;
             }
