@@ -1,6 +1,3 @@
-Code
-Feedback Overview
-AutoTest
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -187,23 +184,8 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 return;
             }
 
-            // Count parameters
-            char *temp = strdup(packet + 1);
-            char *token = strtok(temp, " ");
-            int param_count = 0;
-            while (token) {
-                param_count++;
-                token = strtok(NULL, " ");
-            }
-            free(temp);
-
-            if (param_count != 20) {
-                send_error(current->socket, 201);
-                return;
-            }
-
-            int values[20];
             char *str = packet + 1;
+            int values[20];
             int count = 0;
             
             while (*str && count < 20) {
@@ -214,6 +196,11 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 }
                 count++;
                 while (*str && *str != ' ') str++;
+            }
+
+            if (count != 20) {
+                send_error(current->socket, 201);
+                return;
             }
 
             // Validate all ships first
