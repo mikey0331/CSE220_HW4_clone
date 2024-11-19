@@ -1,3 +1,6 @@
+Code
+Feedback Overview
+AutoTest
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -75,22 +78,6 @@ void send_shot_response(int socket, int ships_remaining, char result) {
     send_response(socket, response);
 }
 
-void send_query_response(int socket, int ships_remaining, int board[MAX_BOARD][MAX_BOARD], int shots[MAX_BOARD][MAX_BOARD]) {
-    char response[BUFFER_SIZE] = {0};
-    sprintf(response, "G %d", ships_remaining);
-    
-    for (int i = 0; i < MAX_BOARD; i++) {
-        for (int j = 0; j < MAX_BOARD; j++) {
-            if (shots[i][j]) {
-                char hit = board[i][j] ? 'H' : 'M';
-                sprintf(response + strlen(response), " %c %d %d", hit, i, j);
-            }
-        }
-    }
-    
-    send_response(socket, response);
-}
-
 int validate_board_command(const char* packet, int is_p1) {
     char *temp = strdup(packet + 1);
     char *token = strtok(temp, " ");
@@ -102,14 +89,14 @@ int validate_board_command(const char* packet, int is_p1) {
     free(temp);
 
     if (is_p1) {
-        if (param_count != 2) return 100;
+        if (param_count != 2) return 0;
         int w = 0, h = 0;
-        if (sscanf(packet + 1, "%d %d", &w, &h) != 2) return 100;
-        if (w < 10 || h < 10) return 200;
+        if (sscanf(packet + 1, "%d %d", &w, &h) != 2) return 0;
+        if (w < 10 || h < 10) return 0;
     } else {
-        if (param_count != 0) return 100;
+        if (param_count != 0) return 0;
     }
-    return 0;
+    return 1;
 }
 
 int check_positions(int positions[4][2], int width, int height, int board[MAX_BOARD][MAX_BOARD]) {
@@ -173,9 +160,8 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 return;
             }
             
-            int error = validate_board_command(packet, is_p1);
-            if (error) {
-                send_error(current->socket, error);
+            if (!validate_board_command(packet, is_p1)) {
+                send_error(current->socket, 200);
                 return;
             }
 
@@ -197,7 +183,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
         case 1:  // Ship placement
             if (packet[0] != 'I') {
-                send_error(current->socket, 101);
+                send_error(current->socket, 201);
                 return;
             }
 
@@ -289,7 +275,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 current->shots[row][col] = 1;
                 
                 if (was_hit) {
-                    // Find which ship was hit and update hits
+                    // Find which ship was hit
                     for (int s = 0; s < MAX_SHIPS; s++) {
                         for (int c = 0; c < SHIP_SIZE; c++) {
                             if (other->ships[s].cells[c][0] == row && 
@@ -316,8 +302,17 @@ void process_packet(GameState *game, char *packet, int is_p1) {
                 game->current_turn = game->current_turn == 1 ? 2 : 1;
             }
             else if (packet[0] == 'Q') {
-                send_query_response(current->socket, other->ships_remaining, other->board, other->shots);
-                game->current_turn = game->current_turn == 1 ? 2 : 1;
+                char response[BUFFER_SIZE] = {0};
+                sprintf(response, "G %d", other->ships_remaining);
+                for (int i = 0; i < game->height; i++) {
+                    for (int j = 0; j < game->width; j++) {
+                        if (current->shots[i][j]) {
+                            char hit = other->board[i][j] ? 'H' : 'M';
+                            sprintf(response + strlen(response), " %c %d %d", hit, i, j);
+                        }
+                    }
+                }
+                send_response(current->socket, response);
             }
             else {
                 send_error(current->socket, 102);
@@ -396,6 +391,7 @@ int main() {
             buffer[strcspn(buffer, "\n")] = '\0';
             process_packet(&game, buffer, 1);
         }
+
         if (FD_ISSET(game.p2.socket, &readfds)) {
             memset(buffer, 0, BUFFER_SIZE);
             ssize_t bytes = read(game.p2.socket, buffer, BUFFER_SIZE-1);
