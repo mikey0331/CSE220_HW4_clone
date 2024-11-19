@@ -181,7 +181,7 @@ void process_packet(GameState *game, char *packet, int is_p1) {
 
         case 1:  // Ship placement
             if (packet[0] != 'I') {
-                send_error(current->socket, 201);
+                send_error(current->socket, 101);
                 return;
             }
 
